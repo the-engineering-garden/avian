@@ -32,7 +32,9 @@ use obvhs::{
     aabb::Aabb,
     bvh2::{Bvh2, insertion_removal::SiblingInsertionCandidate, reinsertion::ReinsertionOptimizer},
     faststack::HeapStack,
-    ploc::{PlocBuilder, PlocSearchDistance, SortPrecision},
+    ploc::{
+        PlocBuilder, PlocSearchDistance, SortPrecision, partial_rebuild::compute_rebuild_path_flags,
+    },
 };
 
 use crate::{data_structures::stable_vec::StableVec, prelude::CollisionLayers};
@@ -104,6 +106,8 @@ pub struct ColliderTreeWorkspace {
     pub insertion_stack: HeapStack<SiblingInsertionCandidate>,
     /// A temporary BVH used during partial rebuilds.
     pub temp_bvh: Bvh2,
+    /// Temporary flagged nodes for partial rebuilds.
+    pub temp_flags: Vec<bool>,
 }
 
 impl Clone for ColliderTreeWorkspace {
@@ -113,6 +117,7 @@ impl Clone for ColliderTreeWorkspace {
             reinsertion_optimizer: ReinsertionOptimizer::default(),
             insertion_stack: self.insertion_stack.clone(),
             temp_bvh: Bvh2::default(),
+            temp_flags: Vec::new(),
         }
     }
 }
@@ -124,6 +129,7 @@ impl Default for ColliderTreeWorkspace {
             reinsertion_optimizer: ReinsertionOptimizer::default(),
             insertion_stack: HeapStack::new_with_capacity(2000),
             temp_bvh: Bvh2::default(),
+            temp_flags: Vec::new(),
         }
     }
 }
@@ -145,6 +151,53 @@ impl ColliderTree {
             return;
         }
         self.bvh.remove_primitive(proxy_index);
+    }
+
+    /// Updates the AABB of a proxy in the tree.
+    ///
+    /// If the BVH should be refitted at the same time, consider using
+    /// [`resize_proxy_aabb`](Self::resize_proxy_aabb) instead.
+    ///
+    /// If resizing a large number of proxies, consider calling this method
+    /// for each proxy and then calling [`refit_all`](Self::refit_all) once at the end.
+    #[inline]
+    pub fn set_proxy_aabb(&mut self, proxy_index: u32, aabb: Aabb) {
+        // Get the node index for the proxy.
+        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
+
+        // Update the proxy's AABB in the BVH.
+        self.bvh.nodes[node_index].set_aabb(aabb);
+    }
+
+    /// Resizes the AABB of a proxy in the tree.
+    ///
+    /// This is equivalent to calling [`set_proxy_aabb`](Self::set_proxy_aabb)
+    /// and then refitting the BVH working up from the resized node.
+    ///
+    /// For resizing a large number of proxies, consider calling [`set_proxy_aabb`](Self::set_proxy_aabb)
+    /// for each proxy and then calling [`refit_all`](Self::refit_all) once at the end.
+    #[inline]
+    pub fn resize_proxy_aabb(&mut self, proxy_index: u32, aabb: Aabb) {
+        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
+        self.bvh.resize_node(node_index, aabb);
+    }
+
+    /// Updates the AABB of a proxy and reinserts it at an optimal place in the tree.
+    #[inline]
+    pub fn reinsert_proxy(&mut self, proxy_index: u32, aabb: Aabb) {
+        // Update the proxy's AABB.
+        self.proxies[proxy_index as usize].aabb = aabb;
+
+        // Reinsert the node into the BVH.
+        let node_id = self.bvh.primitives_to_nodes[proxy_index as usize];
+        self.bvh.resize_node(node_id as usize, aabb);
+        self.bvh.reinsert_node(node_id as usize);
+    }
+
+    /// Refits the entire tree from the leaves up.
+    #[inline]
+    pub fn refit_all(&mut self) {
+        self.bvh.refit_all();
     }
 
     /// Fully rebuilds the tree from the given list of AABBs.
@@ -171,10 +224,15 @@ impl ColliderTree {
     /// Rebuilds parts of the tree corresponding to the given list of leaf node indices.
     #[inline]
     pub fn rebuild_partial(&mut self, leaves: &[u32]) {
+        self.bvh.init_parents_if_uninit();
+
+        // TODO: We could maybe get flagged nodes while refitting the tree.
+        compute_rebuild_path_flags(&self.bvh, leaves, &mut self.workspace.temp_flags);
+
         self.workspace.ploc_builder.partial_rebuild(
             &mut self.bvh,
             &mut self.workspace.temp_bvh,
-            leaves,
+            |node_id| self.workspace.temp_flags[node_id],
             PlocSearchDistance::Minimum,
             SortPrecision::U64,
             0,
@@ -190,57 +248,5 @@ impl ColliderTree {
         self.workspace
             .reinsertion_optimizer
             .run(&mut self.bvh, batch_size_ratio, None);
-    }
-
-    /// Updates the AABB of a proxy and reinserts it at an optimal place in the tree.
-    #[inline]
-    pub fn reinsert_proxy(&mut self, proxy_index: u32, aabb: Aabb) {
-        // Update the proxy's AABB.
-        self.proxies[proxy_index as usize].aabb = aabb;
-
-        // Reinsert the node into the BVH.
-        let node_id = self.bvh.primitives_to_nodes[proxy_index as usize];
-        self.bvh.resize_node(node_id as usize, aabb);
-        self.bvh.reinsert_node(node_id as usize);
-    }
-
-    /// Updates the AABB of a proxy in the tree and refits the BVH, resizing parent nodes as necessary.
-    ///
-    /// Unlike [`reinsert_proxy`](Self::reinsert_proxy), this does not change the position of the proxy in the tree.
-    /// Enlarging proxies withoujt optimizing the tree can degrade query performance over time,
-    /// so it is recommended to periodically call [`rebuild_full`](Self::rebuild_full) or [`optimize`](Self::optimize).
-    #[inline]
-    pub fn enlarge_proxy(&mut self, proxy_index: u32, aabb: Aabb) {
-        // Get the node index for the proxy.
-        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
-
-        // Update the proxy's AABB in the BVH.
-        self.bvh.nodes[node_index].set_aabb(aabb);
-
-        /*
-        // Compute the parent indices if they haven't been initialized yet.
-        self.bvh.init_parents_if_uninit();
-
-        let mut index = self.bvh.parents[node_index] as usize;
-
-        // Refit the BVH working up the tree.
-        // Stop when a parent node's AABB is not changed.
-        loop {
-            let parent_node = &mut self.bvh.nodes[index];
-            let new_aabb = parent_node.aabb.union(&aabb);
-
-            if parent_node.aabb == new_aabb {
-                break;
-            }
-
-            parent_node.aabb = new_aabb;
-
-            if index == 0 {
-                break;
-            }
-
-            index = self.bvh.parents[index] as usize;
-        }
-        */
     }
 }
