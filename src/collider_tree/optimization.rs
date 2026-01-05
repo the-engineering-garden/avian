@@ -26,7 +26,7 @@ impl Plugin for ColliderTreeOptimizationPlugin {
 }
 
 /// Settings for optimizing the dynamic [`ColliderTree`].
-#[derive(Resource, Debug, Reflect)]
+#[derive(Resource, Debug, Default, Reflect)]
 pub struct ColliderTreeOptimization {
     /// If `true`, tree optimization will be performed in-place with minimal allocations.
     /// This has the downside that the tree will be unavailable for [spatial queries]
@@ -39,7 +39,7 @@ pub struct ColliderTreeOptimization {
     /// For optimal performance, set this to `true` if your application
     /// does not perform spatial queries during the simulation step.
     ///
-    /// **Default**: `true`
+    /// **Default**: `false`
     ///
     /// [spatial queries]: crate::spatial_query
     /// [collision hooks]: crate::collision::hooks
@@ -49,15 +49,6 @@ pub struct ColliderTreeOptimization {
     ///
     /// **Default**: [`TreeOptimizationMode::Adaptive`]
     pub optimization_mode: TreeOptimizationMode,
-}
-
-impl Default for ColliderTreeOptimization {
-    fn default() -> Self {
-        Self {
-            optimize_in_place: true,
-            optimization_mode: TreeOptimizationMode::default(),
-        }
-    }
 }
 
 /// The optimization mode for a dynamic [`ColliderTree`].
