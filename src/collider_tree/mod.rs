@@ -22,247 +22,83 @@
 //! [`BvhBroadPhasePlugin`]: crate::collision::broad_phase::bvh::BvhBroadPhasePlugin
 
 mod optimization;
-pub use optimization::*;
+mod tree;
+mod update;
 
-mod plugin;
-pub use plugin::*;
+pub use optimization::{ColliderTreeOptimization, TreeOptimizationMode};
+pub use tree::{ColliderTree, ColliderTreeProxy, ColliderTreeProxyFlags, ColliderTreeWorkspace};
+pub use update::{ColliderTreeProxyIndex, MovedProxies};
 
-use bevy::{
-    ecs::{entity::Entity, resource::Resource},
-    reflect::Reflect,
-};
-use obvhs::{
-    aabb::Aabb,
-    bvh2::{Bvh2, insertion_removal::SiblingInsertionCandidate, reinsertion::ReinsertionOptimizer},
-    faststack::HeapStack,
-    ploc::{
-        PlocBuilder, PlocSearchDistance, SortPrecision, partial_rebuild::compute_rebuild_path_flags,
-    },
-};
+use optimization::ColliderTreeOptimizationPlugin;
+use update::ColliderTreeUpdatePlugin;
 
-use crate::{data_structures::stable_vec::StableVec, prelude::CollisionLayers};
+use core::marker::PhantomData;
 
-/// A [Bounding Volume Hierarchy (BVH)][BVH] for accelerating queries on a set of colliders.
-///
-/// [BVH]: https://en.wikipedia.org/wiki/Bounding_volume_hierarchy
-#[derive(Clone, Default)]
-pub struct ColliderTree {
-    /// The underlying BVH structure.
-    pub bvh: Bvh2,
-    /// The proxies stored in the tree.
-    pub proxies: StableVec<ColliderTreeProxy>,
-    /// A workspace for reusing allocations across tree operations.
-    pub workspace: ColliderTreeWorkspace,
-}
+use crate::prelude::*;
+use bevy::prelude::*;
 
-/// A proxy representing a collider in the [`ColliderTree`].
-#[derive(Clone, Debug)]
-pub struct ColliderTreeProxy {
-    /// The entity this proxy represents.
-    pub entity: Entity,
-    /// The body this collider is attached to.
-    pub body: Entity,
-    /// The tight AABB of the collider.
-    pub aabb: Aabb,
-    /// The collision layers of the collider.
-    pub layers: CollisionLayers,
-    /// Flags for the proxy.
-    pub flags: ColliderTreeProxyFlags,
-}
+/// A plugin that manages [`ColliderTrees`] for a collider type `C`.
+pub struct ColliderTreePlugin<C: AnyCollider>(PhantomData<C>);
 
-/// Flags for a [`ColliderTreeProxy`].
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
-#[reflect(Debug, PartialEq)]
-pub struct ColliderTreeProxyFlags(u32);
-
-// TODO
-bitflags::bitflags! {
-    impl ColliderTreeProxyFlags: u32 {
-        /// Set if the proxy belongs to a dynamic body.
-        const DYNAMIC = 1 << 0;
-        /// Set if the proxy belongs to a kinematic body.
-        const KINEMATIC = 1 << 1;
-        /// Set if the proxy belongs to a static body.
-        const STATIC = 1 << 2;
-        /// Set if the collider is a sensor.
-        const SENSOR = 1 << 3;
-        /// Set if custom filtering is enabled via the `filter_pairs` hook.
-        const CUSTOM_FILTER = 1 << 4;
-    }
-}
-
-/// A workspace for performing operations on a [`ColliderTree`].
-///
-/// This stores temporary data structures and working memory used when modifying the tree.
-/// It is recommended to reuse a single instance of this struct for all operations on a tree
-/// to avoid unnecessary allocations.
-#[derive(Resource)]
-pub struct ColliderTreeWorkspace {
-    /// Builds the tree using PLOC (*Parallel, Locally Ordered Clustering*).
-    pub ploc_builder: PlocBuilder,
-    /// Restructures the BVH, optimizing node locations within the BVH hierarchy per SAH cost.
-    pub reinsertion_optimizer: ReinsertionOptimizer,
-    /// A stack for tracking insertion candidates during proxy insertions.
-    pub insertion_stack: HeapStack<SiblingInsertionCandidate>,
-    /// A temporary BVH used during partial rebuilds.
-    pub temp_bvh: Bvh2,
-    /// Temporary flagged nodes for partial rebuilds.
-    pub temp_flags: Vec<bool>,
-}
-
-impl Clone for ColliderTreeWorkspace {
-    fn clone(&self) -> Self {
-        Self {
-            ploc_builder: self.ploc_builder.clone(),
-            reinsertion_optimizer: ReinsertionOptimizer::default(),
-            insertion_stack: self.insertion_stack.clone(),
-            temp_bvh: Bvh2::default(),
-            temp_flags: Vec::new(),
-        }
-    }
-}
-
-impl Default for ColliderTreeWorkspace {
+impl<C: AnyCollider> Default for ColliderTreePlugin<C> {
     fn default() -> Self {
-        Self {
-            ploc_builder: PlocBuilder::default(),
-            reinsertion_optimizer: ReinsertionOptimizer::default(),
-            insertion_stack: HeapStack::new_with_capacity(2000),
-            temp_bvh: Bvh2::default(),
-            temp_flags: Vec::new(),
-        }
+        Self(PhantomData)
     }
 }
 
-impl ColliderTree {
-    /// Adds a proxy to the tree, returning its index.
-    #[inline]
-    pub fn add_proxy(&mut self, aabb: Aabb, proxy: ColliderTreeProxy) -> u32 {
-        let id = self.proxies.push(proxy) as u32;
-        self.bvh
-            .insert_primitive(aabb, id, &mut self.workspace.insertion_stack);
-        id
-    }
+impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
+    fn build(&self, app: &mut App) {
+        // Add plugin for updating trees as colliders move.
+        app.add_plugins(ColliderTreeUpdatePlugin::<C>::default());
 
-    /// Removes a proxy from the tree.
-    #[inline]
-    pub fn remove_proxy(&mut self, proxy_index: u32) {
-        if self.proxies.try_remove(proxy_index as usize).is_none() {
-            return;
-        }
-        self.bvh.remove_primitive(proxy_index);
-    }
-
-    /// Updates the AABB of a proxy in the tree.
-    ///
-    /// If the BVH should be refitted at the same time, consider using
-    /// [`resize_proxy_aabb`](Self::resize_proxy_aabb) instead.
-    ///
-    /// If resizing a large number of proxies, consider calling this method
-    /// for each proxy and then calling [`refit_all`](Self::refit_all) once at the end.
-    #[inline]
-    pub fn set_proxy_aabb(&mut self, proxy_index: u32, aabb: Aabb) {
-        // Get the node index for the proxy.
-        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
-
-        // Update the proxy's AABB in the BVH.
-        self.bvh.nodes[node_index].set_aabb(aabb);
-    }
-
-    /// Resizes the AABB of a proxy in the tree.
-    ///
-    /// This is equivalent to calling [`set_proxy_aabb`](Self::set_proxy_aabb)
-    /// and then refitting the BVH working up from the resized node.
-    ///
-    /// For resizing a large number of proxies, consider calling [`set_proxy_aabb`](Self::set_proxy_aabb)
-    /// for each proxy and then calling [`refit_all`](Self::refit_all) once at the end.
-    #[inline]
-    pub fn resize_proxy_aabb(&mut self, proxy_index: u32, aabb: Aabb) {
-        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
-        self.bvh.resize_node(node_index, aabb);
-    }
-
-    /// Updates the AABB of a proxy and reinserts it at an optimal place in the tree.
-    #[inline]
-    pub fn reinsert_proxy(&mut self, proxy_index: u32, aabb: Aabb) {
-        // Update the proxy's AABB.
-        self.proxies[proxy_index as usize].aabb = aabb;
-
-        // Reinsert the node into the BVH.
-        let node_id = self.bvh.primitives_to_nodes[proxy_index as usize];
-        self.bvh.resize_node(node_id as usize, aabb);
-        self.bvh.reinsert_node(node_id as usize);
-    }
-
-    /// Refits the entire tree from the leaves up.
-    #[inline]
-    pub fn refit_all(&mut self) {
-        self.bvh.refit_all();
-    }
-
-    /// Fully rebuilds the tree from the given list of AABBs.
-    #[inline]
-    pub fn rebuild_full(&mut self) {
-        self.bvh.init_primitives_to_nodes_if_uninit();
-
-        let mut aabbs: Vec<Aabb> = Vec::with_capacity(self.bvh.primitives_to_nodes.len());
-        let mut indices: Vec<u32> = Vec::with_capacity(self.bvh.primitives_to_nodes.len());
-
-        for (i, node_index) in self.bvh.primitives_to_nodes.iter().enumerate() {
-            aabbs.push(self.bvh.nodes[*node_index as usize].aabb);
-            indices.push(i as u32);
+        // Add plugin for optimizing trees tp maintain good query performance.
+        if !app.is_plugin_added::<ColliderTreeOptimizationPlugin>() {
+            app.add_plugins(ColliderTreeOptimizationPlugin);
         }
 
-        self.workspace.ploc_builder.build_with_bvh(
-            &mut self.bvh,
-            PlocSearchDistance::Minimum,
-            &aabbs,
-            indices,
-            SortPrecision::U64,
-            0,
+        // Initialize resources.
+        app.init_resource::<ColliderTrees>()
+            .init_resource::<MovedProxies>();
+
+        // Configure system sets.
+        app.configure_sets(
+            PhysicsSchedule,
+            ColliderTreeSystems::UpdateAabbs
+                .in_set(PhysicsStepSystems::BroadPhase)
+                .after(BroadPhaseSystems::First)
+                .before(BroadPhaseSystems::CollectCollisions),
+        );
+        app.configure_sets(
+            PhysicsSchedule,
+            ColliderTreeSystems::BeginOptimize.in_set(NarrowPhaseSystems::Update),
+        );
+        app.configure_sets(
+            PhysicsSchedule,
+            ColliderTreeSystems::EndOptimize.in_set(PhysicsStepSystems::Finalize),
         );
     }
+}
 
-    /// Rebuilds parts of the tree corresponding to the given list of leaf node indices.
-    #[inline]
-    pub fn rebuild_partial(&mut self, leaves: &[u32]) {
-        self.bvh.init_parents_if_uninit();
-
-        // TODO: We could maybe get flagged nodes while refitting the tree.
-        compute_rebuild_path_flags(&self.bvh, leaves, &mut self.workspace.temp_flags);
-
-        self.workspace.ploc_builder.partial_rebuild(
-            &mut self.bvh,
-            |node_id| self.workspace.temp_flags[node_id],
-            PlocSearchDistance::Minimum,
-            SortPrecision::U64,
-            0,
-        );
-    }
-
-    /// Restructures the tree using parallel reinsertion, optimizing node locations based on SAH cost.
+/// System sets for managing [`ColliderTrees`].
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColliderTreeSystems {
+    /// Updates the AABBs of colliders.
+    UpdateAabbs,
+    /// Begins optimizing acceleration structures to keep their query performance good.
     ///
-    /// This can be used to improve query performance after the tree quality has degraded,
-    /// for example after many proxy insertions and removals.
-    #[inline]
-    pub fn optimize(&mut self, batch_size_ratio: f32) {
-        self.workspace
-            .reinsertion_optimizer
-            .run(&mut self.bvh, batch_size_ratio, None);
-    }
-
-    /// Restructures the tree using parallel reinsertion, optimizing node locations based on SAH cost.
+    /// This runs concurrently with the simulation step as an async task.
+    BeginOptimize,
+    /// Completes the optimization of acceleration structures started in [`ColliderTreeSystems::BeginOptimize`].
     ///
-    /// Only the specified candidate proxies are considered for reinsertion.
-    #[inline]
-    pub fn optimize_candidates(&mut self, candidates: &[u32], iterations: u32) {
-        self.workspace.reinsertion_optimizer.run_with_candidates(
-            &mut self.bvh,
-            candidates,
-            iterations,
-        );
-    }
+    /// This runs at the end of the simulation step.
+    EndOptimize,
+}
+
+/// Trees for accelerating queries on a set of colliders.
+#[derive(Resource, Default)]
+pub struct ColliderTrees {
+    /// A tree for the colliders of dynamic and kinematic bodies.
+    pub dynamic_tree: ColliderTree,
+    /// A tree for the colliders of static bodies.
+    pub static_tree: ColliderTree,
 }

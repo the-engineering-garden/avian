@@ -3,6 +3,7 @@ use core::cell::RefCell;
 use core::marker::PhantomData;
 
 use crate::{
+    collider_tree::tree::ColliderTreeProxyFlags,
     collision::{broad_phase::BroadPhaseDiagnostics, collider::EnlargedAabb},
     data_structures::bit_vec::BitVec,
     dynamics::solver::solver_body::SolverBody,
@@ -13,47 +14,28 @@ use obvhs::aabb::Aabb;
 #[cfg(feature = "parallel")]
 use thread_local::ThreadLocal;
 
-/// A plugin that manages [`ColliderTrees`] for a collider type `C`.
-pub struct ColliderTreePlugin<C: AnyCollider>(PhantomData<C>);
+/// A plugin for updating [`ColliderTree`]s for a collider type `C`.
+pub(super) struct ColliderTreeUpdatePlugin<C: AnyCollider>(PhantomData<C>);
 
-impl<C: AnyCollider> Default for ColliderTreePlugin<C> {
+impl<C: AnyCollider> Default for ColliderTreeUpdatePlugin<C> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
+impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
     fn build(&self, app: &mut App) {
-        app.add_plugins(super::ColliderTreeOptimizationPlugin);
+        // Initialize resources.
+        app.init_resource::<MovedProxies>();
 
-        app.init_resource::<ColliderTrees>()
-            .init_resource::<MovedProxies>();
-
-        app.configure_sets(
-            PhysicsSchedule,
-            (ColliderTreeSystems::UpdateAabbs
-                .in_set(PhysicsStepSystems::BroadPhase)
-                .after(BroadPhaseSystems::First)
-                .before(BroadPhaseSystems::CollectCollisions),),
-        );
-
-        app.configure_sets(
-            PhysicsSchedule,
-            ColliderTreeSystems::BeginOptimize.in_set(NarrowPhaseSystems::Update),
-        );
-
-        app.configure_sets(
-            PhysicsSchedule,
-            ColliderTreeSystems::EndOptimize.in_set(PhysicsStepSystems::Finalize),
-        );
-
-        // Allowing ambiguities is required so that it's possible
-        // to have multiple collision backends at the same time.
+        // Add systems for updating collider AABBs.
         app.add_systems(
             PhysicsSchedule,
             (update_dynamic_aabbs::<C>, update_static_aabbs::<C>)
                 .chain()
                 .in_set(ColliderTreeSystems::UpdateAabbs)
+                // Allowing ambiguities is required so that it's possible
+                // to have multiple collision backends at the same time.
                 .ambiguous_with_all(),
         );
 
@@ -155,30 +137,6 @@ impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
             },
         );
     }
-}
-
-/// System sets for managing [`ColliderTrees`].
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ColliderTreeSystems {
-    /// Updates the AABBs of colliders.
-    UpdateAabbs,
-    /// Begins optimizing acceleration structures to keep their query performance good.
-    ///
-    /// This runs concurrently with the simulation step as an async task.
-    BeginOptimize,
-    /// Completes the optimization of acceleration structures started in [`ColliderTreeSystems::BeginOptimize`].
-    ///
-    /// This runs at the end of the simulation step.
-    EndOptimize,
-}
-
-/// Trees for accelerating queries on a set of colliders.
-#[derive(Resource, Default)]
-pub struct ColliderTrees {
-    /// A tree for the colliders of dynamic and kinematic bodies.
-    pub dynamic_tree: ColliderTree,
-    /// A tree for the colliders of static and sleeping bodies.
-    pub static_tree: ColliderTree,
 }
 
 /// The index of a [`ColliderTreeProxy`] in a [`ColliderTree`].

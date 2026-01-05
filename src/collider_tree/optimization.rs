@@ -141,10 +141,16 @@ impl TreeOptimizationMode {
     }
 }
 
-/// A resource representing an ongoing async rebuild of a collider tree.
+/// A resource tracking the ongoing optimization task for the dynamic [`ColliderTree`].
 #[derive(Resource, Default)]
 struct OptimizationTask {
+    /// The collider tree being optimized.
+    ///
+    /// This is taken from the dynamic tree before optimization begins,
+    /// and the optimized BVH is written back to the dynamic tree
+    /// when the optimization is complete.
     tree: ColliderTree,
+
     /// The async task performing the rebuild.
     task: Option<Task<CommandQueue>>,
 }
@@ -216,6 +222,8 @@ fn optimize_trees(
     diagnostics.optimize += start.elapsed();
 }
 
+/// Spawns and returns an async task to optimize the given collider tree
+/// using the provided optimization function.
 fn spawn_optimization_task(
     task_pool: &AsyncComputeTaskPool,
     mut tree: ColliderTree,
