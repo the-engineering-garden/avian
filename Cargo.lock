@@ -3493,7 +3493,7 @@ dependencies = [
 [[package]]
 name = "obvhs"
 version = "0.3.0"
-source = "git+https://github.com/DGriffin91/obvhs?branch=insertion_removal#139a7d8332917d5a4a0428b25f2f4bb929025bcd"
+source = "git+https://github.com/DGriffin91/obvhs?branch=insertion_removal#1ae7b32b10eea7a55b6077763825a8e61dc0fe5a"
 dependencies = [
  "bytemuck",
  "glam 0.30.9",
@@ -4532,9 +4532,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.112"
+version = "2.0.113"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21f182278bf2d2bcb3c88b1b08a37df029d71ce3d3ae26168e3c653b213b99d4"
+checksum = "678faa00651c9eb72dd2020cbdf275d92eccb2400d568e419efdd64838145cb4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5706,6 +5706,6 @@ checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
 
 [[package]]
 name = "zmij"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee2a72b10d087f75fb2e1c2c7343e308fe6970527c22a41caf8372e165ff5c1"
+checksum = "30e0d8dffbae3d840f64bda38e28391faef673a7b5a6017840f2a106c8145868"

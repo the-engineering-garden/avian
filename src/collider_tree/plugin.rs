@@ -8,12 +8,7 @@ use crate::{
     dynamics::solver::solver_body::SolverBody,
     prelude::*,
 };
-use bevy::{
-    ecs::{system::StaticSystemParam, world::CommandQueue},
-    platform::collections::HashSet,
-    prelude::*,
-    tasks::{AsyncComputeTaskPool, Task, block_on},
-};
+use bevy::{ecs::system::StaticSystemParam, platform::collections::HashSet, prelude::*};
 use obvhs::aabb::Aabb;
 #[cfg(feature = "parallel")]
 use thread_local::ThreadLocal;
@@ -29,8 +24,9 @@ impl<C: AnyCollider> Default for ColliderTreePlugin<C> {
 
 impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
     fn build(&self, app: &mut App) {
+        app.add_plugins(super::ColliderTreeOptimizationPlugin);
+
         app.init_resource::<ColliderTrees>()
-            .init_resource::<ColliderTreeRebuild>()
             .init_resource::<MovedProxies>();
 
         app.configure_sets(
@@ -59,16 +55,6 @@ impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
                 .chain()
                 .in_set(ColliderTreeSystems::UpdateAabbs)
                 .ambiguous_with_all(),
-        );
-
-        app.add_systems(
-            PhysicsSchedule,
-            rebuild_trees.in_set(ColliderTreeSystems::BeginOptimize),
-        );
-
-        app.add_systems(
-            PhysicsSchedule,
-            block_on_rebuild_trees.in_set(ColliderTreeSystems::EndOptimize),
         );
 
         // Initialize `ColliderAabb` for colliders.
@@ -184,14 +170,6 @@ pub enum ColliderTreeSystems {
     ///
     /// This runs at the end of the simulation step.
     EndOptimize,
-}
-
-/// A resource representing an ongoing async rebuild of a collider tree.
-#[derive(Resource, Default)]
-struct ColliderTreeRebuild {
-    tree: ColliderTree,
-    /// The async task performing the rebuild.
-    task: Option<Task<CommandQueue>>,
 }
 
 /// Trees for accelerating queries on a set of colliders.
@@ -519,111 +497,4 @@ fn update_static_aabbs<C: AnyCollider>(
     }
 
     diagnostics.update += start.elapsed();
-}
-
-/// Begins a rebuild of the dynamic [`ColliderTree`] to optimize its structure.
-///
-/// This spawns an async task that performs the rebuild concurrently with the simulation step.
-fn rebuild_trees(
-    mut collider_trees: ResMut<ColliderTrees>,
-    mut tree_rebuild: ResMut<ColliderTreeRebuild>,
-    moved_proxies: ResMut<MovedProxies>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
-) {
-    let task_pool = AsyncComputeTaskPool::get();
-
-    let start = crate::utils::Instant::now();
-
-    // Use the dynamic tree's workspace for the rebuild.
-    core::mem::swap(
-        &mut collider_trees.dynamic_tree.workspace,
-        &mut tree_rebuild.tree.workspace,
-    );
-
-    /// The threshold ratio of moved proxies to total proxies
-    /// below which a partial rebuild is performed.
-    ///
-    /// For higher ratios, a full rebuild typically performs better.
-    // TODO: If we can reduce the overhead of partial rebuilds,
-    //       we could make this closer to 1.0.
-    const PARTIAL_REBUILD_THRESHOLD: f32 = 0.15;
-
-    let moved_ratio =
-        moved_proxies.proxies().len() as f32 / collider_trees.dynamic_tree.proxies.len() as f32;
-
-    if moved_ratio < PARTIAL_REBUILD_THRESHOLD {
-        // Partial rebuild
-        let mut tree = core::mem::take(&mut tree_rebuild.tree);
-        tree.bvh.clone_from(&collider_trees.dynamic_tree.bvh);
-
-        let moved_leaves = moved_proxies
-            .proxies()
-            .iter()
-            .map(|&i| tree.bvh.primitives_to_nodes[i as usize])
-            .collect::<Vec<u32>>();
-
-        // Spawn the async task for rebuilding the tree.
-        let task = task_pool.spawn(async move {
-            tree.rebuild_partial(&moved_leaves);
-
-            let mut command_queue = CommandQueue::default();
-            command_queue.push(move |world: &mut World| {
-                let mut collider_trees = world
-                    .get_resource_mut::<ColliderTrees>()
-                    .expect("ColliderTrees resource missing");
-                collider_trees.dynamic_tree.bvh = tree.bvh;
-            });
-            command_queue
-        });
-
-        tree_rebuild.task = Some(task);
-    } else {
-        // Full rebuild
-        let mut tree = core::mem::take(&mut tree_rebuild.tree);
-        tree.proxies
-            .clone_from(&collider_trees.dynamic_tree.proxies);
-
-        // Spawn the async task for rebuilding the tree.
-        let task = task_pool.spawn(async move {
-            tree.rebuild_full();
-
-            let mut command_queue = CommandQueue::default();
-            command_queue.push(move |world: &mut World| {
-                let mut collider_trees = world
-                    .get_resource_mut::<ColliderTrees>()
-                    .expect("ColliderTrees resource missing");
-                collider_trees.dynamic_tree = tree;
-            });
-            command_queue
-        });
-
-        tree_rebuild.task = Some(task);
-    }
-
-    diagnostics.optimize += start.elapsed();
-}
-
-/// Completes the rebuild of the dynamic [`ColliderTree`] started in [`rebuild_trees`].
-fn block_on_rebuild_trees(
-    mut commands: Commands,
-    mut collider_trees: ResMut<ColliderTrees>,
-    mut tree_rebuild: ResMut<ColliderTreeRebuild>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
-) {
-    let start = crate::utils::Instant::now();
-
-    if let Some(task) = &mut tree_rebuild.task {
-        let mut command_queue = block_on(task);
-        commands.append(&mut command_queue);
-    }
-
-    tree_rebuild.task = None;
-
-    // Restore the dynamic tree's workspace.
-    core::mem::swap(
-        &mut collider_trees.dynamic_tree.workspace,
-        &mut tree_rebuild.tree.workspace,
-    );
-
-    diagnostics.optimize += start.elapsed();
 }

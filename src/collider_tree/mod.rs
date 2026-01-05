@@ -21,6 +21,9 @@
 //! [`SpatialQuery`]: crate::spatial_query::SpatialQuery
 //! [`BvhBroadPhasePlugin`]: crate::collision::broad_phase::bvh::BvhBroadPhasePlugin
 
+mod optimization;
+pub use optimization::*;
+
 mod plugin;
 pub use plugin::*;
 
@@ -203,11 +206,13 @@ impl ColliderTree {
     /// Fully rebuilds the tree from the given list of AABBs.
     #[inline]
     pub fn rebuild_full(&mut self) {
-        let mut aabbs: Vec<Aabb> = Vec::with_capacity(self.proxies.len());
-        let mut indices: Vec<u32> = Vec::with_capacity(self.proxies.len());
+        self.bvh.init_primitives_to_nodes_if_uninit();
 
-        for (i, proxy) in self.proxies.iter() {
-            aabbs.push(proxy.aabb);
+        let mut aabbs: Vec<Aabb> = Vec::with_capacity(self.bvh.primitives_to_nodes.len());
+        let mut indices: Vec<u32> = Vec::with_capacity(self.bvh.primitives_to_nodes.len());
+
+        for (i, node_index) in self.bvh.primitives_to_nodes.iter().enumerate() {
+            aabbs.push(self.bvh.nodes[*node_index as usize].aabb);
             indices.push(i as u32);
         }
 
@@ -231,7 +236,6 @@ impl ColliderTree {
 
         self.workspace.ploc_builder.partial_rebuild(
             &mut self.bvh,
-            &mut self.workspace.temp_bvh,
             |node_id| self.workspace.temp_flags[node_id],
             PlocSearchDistance::Minimum,
             SortPrecision::U64,
@@ -248,5 +252,17 @@ impl ColliderTree {
         self.workspace
             .reinsertion_optimizer
             .run(&mut self.bvh, batch_size_ratio, None);
+    }
+
+    /// Restructures the tree using parallel reinsertion, optimizing node locations based on SAH cost.
+    ///
+    /// Only the specified candidate proxies are considered for reinsertion.
+    #[inline]
+    pub fn optimize_candidates(&mut self, candidates: &[u32], iterations: u32) {
+        self.workspace.reinsertion_optimizer.run_with_candidates(
+            &mut self.bvh,
+            candidates,
+            iterations,
+        );
     }
 }
