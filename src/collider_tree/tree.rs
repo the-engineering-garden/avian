@@ -11,7 +11,9 @@ use obvhs::{
     },
 };
 
-use crate::{data_structures::stable_vec::StableVec, prelude::CollisionLayers};
+use crate::{
+    collider_tree::ProxyId, data_structures::stable_vec::StableVec, prelude::CollisionLayers,
+};
 
 /// A [Bounding Volume Hierarchy (BVH)][BVH] for accelerating queries on a set of colliders.
 ///
@@ -22,6 +24,11 @@ pub struct ColliderTree {
     pub bvh: Bvh2,
     /// The proxies stored in the tree.
     pub proxies: StableVec<ColliderTreeProxy>,
+    /// A list of moved proxies since the last update.
+    ///
+    /// This is used during tree optimization to determine
+    /// which proxies need to be reinserted or rebuilt.
+    pub moved_proxies: Vec<ProxyId>,
     /// A workspace for reusing allocations across tree operations.
     pub workspace: ColliderTreeWorkspace,
 }
@@ -62,6 +69,32 @@ bitflags::bitflags! {
         const SENSOR = 1 << 3;
         /// Set if custom filtering is enabled via the `filter_pairs` hook.
         const CUSTOM_FILTER = 1 << 4;
+    }
+}
+
+impl ColliderTreeProxy {
+    /// Returns `true` if the proxy belongs to a dynamic body.
+    #[inline]
+    pub fn is_dynamic(&self) -> bool {
+        self.flags.contains(ColliderTreeProxyFlags::DYNAMIC)
+    }
+
+    /// Returns `true` if the proxy belongs to a kinematic body.
+    #[inline]
+    pub fn is_kinematic(&self) -> bool {
+        self.flags.contains(ColliderTreeProxyFlags::KINEMATIC)
+    }
+
+    /// Returns `true` if the proxy belongs to a static body.
+    #[inline]
+    pub fn is_static(&self) -> bool {
+        self.flags.contains(ColliderTreeProxyFlags::STATIC)
+    }
+
+    /// Returns `true` if the collider is a sensor.
+    #[inline]
+    pub fn is_sensor(&self) -> bool {
+        self.flags.contains(ColliderTreeProxyFlags::SENSOR)
     }
 }
 
@@ -111,20 +144,56 @@ impl Default for ColliderTreeWorkspace {
 impl ColliderTree {
     /// Adds a proxy to the tree, returning its index.
     #[inline]
-    pub fn add_proxy(&mut self, aabb: Aabb, proxy: ColliderTreeProxy) -> u32 {
+    pub fn add_proxy(&mut self, aabb: Aabb, proxy: ColliderTreeProxy) -> ProxyId {
         let id = self.proxies.push(proxy) as u32;
         self.bvh
             .insert_primitive(aabb, id, &mut self.workspace.insertion_stack);
-        id
+        ProxyId::new(id)
     }
 
     /// Removes a proxy from the tree.
     #[inline]
-    pub fn remove_proxy(&mut self, proxy_index: u32) {
-        if self.proxies.try_remove(proxy_index as usize).is_none() {
+    pub fn remove_proxy(&mut self, proxy_id: ProxyId) {
+        if self.proxies.try_remove(proxy_id.index()).is_none() {
             return;
         }
-        self.bvh.remove_primitive(proxy_index);
+        self.bvh.remove_primitive(proxy_id.id());
+    }
+
+    /// Gets a proxy from the tree by its ID.
+    ///
+    /// Returns `None` if the proxy ID is invalid.
+    #[inline]
+    pub fn get_proxy(&self, proxy_id: ProxyId) -> Option<&ColliderTreeProxy> {
+        self.proxies.get(proxy_id.index())
+    }
+
+    /// Gets a mutable reference to a proxy from the tree by its ID.
+    ///
+    /// Returns `None` if the proxy ID is invalid.
+    #[inline]
+    pub fn get_proxy_mut(&mut self, proxy_id: ProxyId) -> Option<&mut ColliderTreeProxy> {
+        self.proxies.get_mut(proxy_id.index())
+    }
+
+    /// Gets a proxy from the tree by its ID without bounds checking.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the `proxy_id` is valid.
+    #[inline]
+    pub unsafe fn get_proxy_unchecked(&self, proxy_id: ProxyId) -> &ColliderTreeProxy {
+        unsafe { self.proxies.get_unchecked(proxy_id.index()) }
+    }
+
+    /// Gets a mutable reference to a proxy from the tree by its ID without bounds checking.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the `proxy_id` is valid.
+    #[inline]
+    pub unsafe fn get_proxy_unchecked_mut(&mut self, proxy_id: ProxyId) -> &mut ColliderTreeProxy {
+        unsafe { self.proxies.get_unchecked_mut(proxy_id.index()) }
     }
 
     /// Updates the AABB of a proxy in the tree.
@@ -135,9 +204,9 @@ impl ColliderTree {
     /// If resizing a large number of proxies, consider calling this method
     /// for each proxy and then calling [`refit_all`](Self::refit_all) once at the end.
     #[inline]
-    pub fn set_proxy_aabb(&mut self, proxy_index: u32, aabb: Aabb) {
+    pub fn set_proxy_aabb(&mut self, proxy_id: ProxyId, aabb: Aabb) {
         // Get the node index for the proxy.
-        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
+        let node_index = self.bvh.primitives_to_nodes[proxy_id.index()] as usize;
 
         // Update the proxy's AABB in the BVH.
         self.bvh.nodes[node_index].set_aabb(aabb);
@@ -151,19 +220,19 @@ impl ColliderTree {
     /// For resizing a large number of proxies, consider calling [`set_proxy_aabb`](Self::set_proxy_aabb)
     /// for each proxy and then calling [`refit_all`](Self::refit_all) once at the end.
     #[inline]
-    pub fn resize_proxy_aabb(&mut self, proxy_index: u32, aabb: Aabb) {
-        let node_index = self.bvh.primitives_to_nodes[proxy_index as usize] as usize;
+    pub fn resize_proxy_aabb(&mut self, proxy_id: ProxyId, aabb: Aabb) {
+        let node_index = self.bvh.primitives_to_nodes[proxy_id.index()] as usize;
         self.bvh.resize_node(node_index, aabb);
     }
 
     /// Updates the AABB of a proxy and reinserts it at an optimal place in the tree.
     #[inline]
-    pub fn reinsert_proxy(&mut self, proxy_index: u32, aabb: Aabb) {
+    pub fn reinsert_proxy(&mut self, proxy_id: ProxyId, aabb: Aabb) {
         // Update the proxy's AABB.
-        self.proxies[proxy_index as usize].aabb = aabb;
+        self.proxies[proxy_id.index()].aabb = aabb;
 
         // Reinsert the node into the BVH.
-        let node_id = self.bvh.primitives_to_nodes[proxy_index as usize];
+        let node_id = self.bvh.primitives_to_nodes[proxy_id.index()];
         self.bvh.resize_node(node_id as usize, aabb);
         self.bvh.reinsert_node(node_id as usize);
     }

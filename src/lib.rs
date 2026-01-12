@@ -545,7 +545,7 @@ pub mod prelude {
     #[expect(deprecated)]
     pub use crate::{
         PhysicsPlugins,
-        collider_tree::*,
+        collider_tree::{ColliderTreeOptimization, ColliderTreePlugin, TreeOptimizationMode},
         collision::prelude::*,
         dynamics::{self, ccd::SpeculativeMargin, prelude::*},
         interpolation::*,

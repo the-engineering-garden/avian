@@ -363,7 +363,6 @@ pub type TrimeshBuilderError = parry::shape::TriMeshBuilderError;
     ColliderAabb,
     CollisionLayers,
     EnlargedAabb,
-    ColliderTreeProxyIndex(0),
     ColliderDensity,
     ColliderMassProperties
 )]

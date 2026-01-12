@@ -22,12 +22,14 @@
 //! [`BvhBroadPhasePlugin`]: crate::collision::broad_phase::bvh::BvhBroadPhasePlugin
 
 mod optimization;
+mod proxy_key;
 mod tree;
 mod update;
 
 pub use optimization::{ColliderTreeOptimization, TreeOptimizationMode};
+pub use proxy_key::{ColliderTreeProxyKey, ProxyId};
 pub use tree::{ColliderTree, ColliderTreeProxy, ColliderTreeProxyFlags, ColliderTreeWorkspace};
-pub use update::{ColliderTreeProxyIndex, MovedProxies};
+pub use update::MovedProxies;
 
 use optimization::ColliderTreeOptimizationPlugin;
 use update::ColliderTreeUpdatePlugin;
@@ -48,6 +50,12 @@ impl<C: AnyCollider> Default for ColliderTreePlugin<C> {
 
 impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
     fn build(&self, app: &mut App) {
+        // Register required components.
+        let _ = app.try_register_required_components_with::<C, ColliderTreeProxyKey>(|| {
+            // Use a default proxy key. This will be overwritten when the proxy is actually created.
+            ColliderTreeProxyKey::PLACEHOLDER
+        });
+
         // Add plugin for updating trees as colliders move.
         app.add_plugins(ColliderTreeUpdatePlugin::<C>::default());
 
@@ -97,8 +105,32 @@ pub enum ColliderTreeSystems {
 /// Trees for accelerating queries on a set of colliders.
 #[derive(Resource, Default)]
 pub struct ColliderTrees {
-    /// A tree for the colliders of dynamic and kinematic bodies.
+    /// A tree for the colliders of dynamic bodies.
     pub dynamic_tree: ColliderTree,
+    /// A tree for the colliders of kinematic bodies.
+    pub kinematic_tree: ColliderTree,
     /// A tree for the colliders of static bodies.
     pub static_tree: ColliderTree,
+}
+
+impl ColliderTrees {
+    /// Returns the tree for the given body type.
+    #[inline]
+    pub const fn tree_for_body(&self, body: RigidBody) -> &ColliderTree {
+        match body {
+            RigidBody::Dynamic => &self.dynamic_tree,
+            RigidBody::Kinematic => &self.kinematic_tree,
+            RigidBody::Static => &self.static_tree,
+        }
+    }
+
+    /// Returns a mutable reference to the tree for the given body type.
+    #[inline]
+    pub const fn tree_for_body_mut(&mut self, body: RigidBody) -> &mut ColliderTree {
+        match body {
+            RigidBody::Dynamic => &mut self.dynamic_tree,
+            RigidBody::Kinematic => &mut self.kinematic_tree,
+            RigidBody::Static => &mut self.static_tree,
+        }
+    }
 }

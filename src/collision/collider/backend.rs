@@ -7,6 +7,7 @@ use core::marker::PhantomData;
 #[cfg(all(feature = "collider-from-mesh", feature = "default-collider"))]
 use crate::collision::collider::cache::ColliderCache;
 use crate::{
+    collision::collider::EnlargedAabb,
     physics_transform::{PhysicsTransformConfig, PhysicsTransformSystems, init_physics_transform},
     prelude::*,
 };
@@ -95,6 +96,7 @@ impl<C: ScalableCollider> Plugin for ColliderBackendPlugin<C> {
         let _ = app.try_register_required_components_with::<C, Rotation>(|| Rotation::PLACEHOLDER);
         let _ = app.try_register_required_components::<C, ColliderMarker>();
         let _ = app.try_register_required_components::<C, ColliderAabb>();
+        let _ = app.try_register_required_components::<C, EnlargedAabb>();
         let _ = app.try_register_required_components::<C, CollisionLayers>();
         let _ = app.try_register_required_components::<C, ColliderDensity>();
         let _ = app.try_register_required_components::<C, ColliderMassProperties>();

@@ -11,6 +11,7 @@ pub use configuration::*;
 pub use gizmos::*;
 
 use crate::{
+    collider_tree::ColliderTrees,
     dynamics::{
         joints::EntityConstraint,
         solver::islands::{BodyIslandNode, PhysicsIslands},

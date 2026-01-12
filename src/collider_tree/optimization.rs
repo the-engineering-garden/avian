@@ -1,4 +1,8 @@
-use crate::{collision::broad_phase::BroadPhaseDiagnostics, prelude::*};
+use crate::{
+    collider_tree::{ColliderTree, ColliderTreeSystems, ColliderTrees, MovedProxies},
+    collision::broad_phase::BroadPhaseDiagnostics,
+    prelude::*,
+};
 use bevy::{
     ecs::world::CommandQueue,
     prelude::*,
@@ -183,7 +187,7 @@ fn optimize_trees(
             let moved_leaves = moved_proxies
                 .proxies()
                 .iter()
-                .map(|&i| tree.bvh.primitives_to_nodes[i as usize])
+                .map(|key| tree.bvh.primitives_to_nodes[key.id().index()])
                 .collect::<Vec<u32>>();
 
             spawn_optimization_task(task_pool, tree, move |tree| {
@@ -194,7 +198,7 @@ fn optimize_trees(
             let moved_leaves = moved_proxies
                 .proxies()
                 .iter()
-                .map(|&i| tree.bvh.primitives_to_nodes[i as usize])
+                .map(|key| tree.bvh.primitives_to_nodes[key.id().index()])
                 .collect::<Vec<u32>>();
 
             spawn_optimization_task(task_pool, tree, move |tree| {
