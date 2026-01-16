@@ -70,6 +70,9 @@ impl Plugin for PhysicsTransformPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsTransformConfig>();
 
+        // In case `TransformPlugin` is not added
+        app.init_resource::<StaticTransformOptimizations>();
+
         if app
             .world()
             .resource::<PhysicsTransformConfig>()
