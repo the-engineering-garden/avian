@@ -25,7 +25,7 @@ jobs:
                 shared-key: lints
             - name: Install Linux dependencies
               if: ${{ matrix.os == 'ubuntu-latest' }}
-              run: sudo apt-get update; sudo apt-get install --no-install-recommends libwayland-dev
+              run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
             - name: Run cargo check
               run: cargo check --locked --all-targets --no-default-features --features 2d,3d,f32
 
@@ -42,7 +42,7 @@ jobs:
                 shared-key: lints
             - name: Install Linux dependencies
               if: ${{ matrix.os == 'ubuntu-latest' }}
-              run: sudo apt-get update; sudo apt-get install --no-install-recommends libwayland-dev
+              run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
             - name: Run cargo doc
               run: cargo doc --locked --workspace --no-deps --document-private-items --keep-going
 
@@ -62,7 +62,7 @@ jobs:
                 components: llvm-tools-preview
             - uses: cargo-bins/cargo-binstall@main
             - name: Install Linux dependencies
-              run: sudo apt-get update; sudo apt-get install --no-install-recommends libwayland-dev
+              run: sudo apt-get update; sudo apt-get install --no-install-recommends libasound2-dev libudev-dev libwayland-dev
               if: ${{ matrix.os == 'ubuntu-latest' }}
             - name: Install nextest
               run: cargo binstall cargo-nextest --force
