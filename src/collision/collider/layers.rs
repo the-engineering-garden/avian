@@ -355,6 +355,7 @@ impl Not for LayerMask {
 /// assert!((layers.memberships & 0b0011) != 0);
 /// ```
 #[derive(Reflect, Clone, Copy, Component, Debug, PartialEq, Eq)]
+#[component(immutable)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 #[reflect(Debug, Component, PartialEq)]

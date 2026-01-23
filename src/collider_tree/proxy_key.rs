@@ -5,7 +5,7 @@ use bevy::{ecs::component::Component, reflect::Reflect};
 use crate::prelude::RigidBody;
 
 /// A key for a proxy in a [`ColliderTree`], encoding both
-/// the [`ProxyId`] and the tree type (dynamic, kinematic, static).
+/// the [`ProxyId`] and the [`ColliderTreeType`].
 ///
 /// The tree type is stored in the lower 2 bits of the key,
 /// leaving 30 bits for the [`ProxyId`].
@@ -20,9 +20,9 @@ impl ColliderTreeProxyKey {
 
     /// Creates a new [`ColliderTreeProxyKey`] from the given [`ProxyId`] and tree type.
     #[inline]
-    pub const fn new(id: ProxyId, body: RigidBody) -> Self {
+    pub const fn new(id: ProxyId, tree_type: ColliderTreeType) -> Self {
         // Encode the tree type in the lower 2 bits.
-        ColliderTreeProxyKey((id.id() << 2) | body as u32)
+        ColliderTreeProxyKey((id.id() << 2) | (tree_type as u32))
     }
 
     /// Returns the [`ProxyId`] of the proxy.
@@ -31,17 +31,30 @@ impl ColliderTreeProxyKey {
         ProxyId::new(self.0 >> 2)
     }
 
-    /// Returns the tree type.
+    /// Returns the [`ColliderTreeType`] of the proxy.
     #[inline]
-    pub const fn body(&self) -> RigidBody {
+    pub const fn tree_type(&self) -> ColliderTreeType {
         match self.0 & 0b11 {
-            // TODO: The "dynamic, static, kinematic" order is a bit weird,
-            //       but it comes from the order of the `RigidBody` enum.
-            //       Consider changing it in the future.
-            0 => RigidBody::Dynamic,
-            1 => RigidBody::Static,
-            2 => RigidBody::Kinematic,
-            // Safety: Bitwise AND with 0b11 can only yield 0, 1, or 2.
+            0 => ColliderTreeType::Dynamic,
+            1 => ColliderTreeType::Kinematic,
+            2 => ColliderTreeType::Static,
+            3 => ColliderTreeType::Standalone,
+            // Safety: Bitwise AND with 0b11 can only yield 0, 1, 2, or 3.
+            _ => unsafe { unreachable_unchecked() },
+        }
+    }
+
+    /// Returns the rigid body type associated with the proxy.
+    ///
+    /// If the proxy is a standalone collider with no body, returns `None`.
+    #[inline]
+    pub const fn body(&self) -> Option<RigidBody> {
+        match self.0 & 0b11 {
+            0 => Some(RigidBody::Dynamic),
+            1 => Some(RigidBody::Kinematic),
+            2 => Some(RigidBody::Static),
+            3 => None,
+            // Safety: Bitwise AND with 0b11 can only yield 0, 1, 2, or 3.
             _ => unsafe { unreachable_unchecked() },
         }
     }
@@ -49,19 +62,37 @@ impl ColliderTreeProxyKey {
     /// Returns `true` if the proxy belongs to a dynamic body.
     #[inline]
     pub const fn is_dynamic(&self) -> bool {
-        self.body() as u32 == RigidBody::Dynamic as u32
-    }
-
-    /// Returns `true` if the proxy belongs to a static body.
-    #[inline]
-    pub const fn is_static(&self) -> bool {
-        self.body() as u32 == RigidBody::Static as u32
+        if let Some(body) = self.body() {
+            body as u32 == RigidBody::Dynamic as u32
+        } else {
+            false
+        }
     }
 
     /// Returns `true` if the proxy belongs to a kinematic body.
     #[inline]
     pub const fn is_kinematic(&self) -> bool {
-        self.body() as u32 == RigidBody::Kinematic as u32
+        if let Some(body) = self.body() {
+            body as u32 == RigidBody::Kinematic as u32
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` if the proxy belongs to a static body.
+    #[inline]
+    pub const fn is_static(&self) -> bool {
+        if let Some(body) = self.body() {
+            body as u32 == RigidBody::Static as u32
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` if the proxy is a standalone collider with no body.
+    #[inline]
+    pub const fn is_standalone(&self) -> bool {
+        self.body().is_none()
     }
 }
 
@@ -126,5 +157,92 @@ impl Ord for ProxyId {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.0.cmp(&other.0)
+    }
+}
+
+/// The type of a collider tree, corresponding to the rigid body type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum ColliderTreeType {
+    /// A tree for dynamic bodies.
+    Dynamic = 0,
+    /// A tree for kinematic bodies.
+    Kinematic = 1,
+    /// A tree for static bodies.
+    Static = 2,
+    /// A tree for standalone colliders with no associated rigid body.
+    Standalone = 3,
+}
+
+impl ColliderTreeType {
+    /// Creates a new [`ColliderTreeType`] from the given optional rigid body type.
+    ///
+    /// `None` corresponds to standalone colliders with no body.
+    #[inline]
+    pub const fn from_body(body: Option<RigidBody>) -> Self {
+        match body {
+            Some(RigidBody::Dynamic) => ColliderTreeType::Dynamic,
+            Some(RigidBody::Kinematic) => ColliderTreeType::Kinematic,
+            Some(RigidBody::Static) => ColliderTreeType::Static,
+            None => ColliderTreeType::Standalone,
+        }
+    }
+
+    /// Returns `true` if the tree type is for dynamic bodies.
+    #[inline]
+    pub const fn is_dynamic(&self) -> bool {
+        matches!(self, ColliderTreeType::Dynamic)
+    }
+
+    /// Returns `true` if the tree type is for kinematic bodies.
+    #[inline]
+    pub const fn is_kinematic(&self) -> bool {
+        matches!(self, ColliderTreeType::Kinematic)
+    }
+
+    /// Returns `true` if the tree type is for static bodies.
+    #[inline]
+    pub const fn is_static(&self) -> bool {
+        matches!(self, ColliderTreeType::Static)
+    }
+
+    /// Returns `true` if the tree type is for standalone colliders with no body.
+    #[inline]
+    pub const fn is_standalone(&self) -> bool {
+        matches!(self, ColliderTreeType::Standalone)
+    }
+}
+
+impl From<Option<RigidBody>> for ColliderTreeType {
+    #[inline]
+    fn from(body: Option<RigidBody>) -> Self {
+        match body {
+            Some(RigidBody::Dynamic) => ColliderTreeType::Dynamic,
+            Some(RigidBody::Kinematic) => ColliderTreeType::Kinematic,
+            Some(RigidBody::Static) => ColliderTreeType::Static,
+            None => ColliderTreeType::Standalone,
+        }
+    }
+}
+
+impl From<ColliderTreeType> for Option<RigidBody> {
+    #[inline]
+    fn from(tree_type: ColliderTreeType) -> Self {
+        match tree_type {
+            ColliderTreeType::Dynamic => Some(RigidBody::Dynamic),
+            ColliderTreeType::Kinematic => Some(RigidBody::Kinematic),
+            ColliderTreeType::Static => Some(RigidBody::Static),
+            ColliderTreeType::Standalone => None,
+        }
+    }
+}
+
+impl From<RigidBody> for ColliderTreeType {
+    #[inline]
+    fn from(body: RigidBody) -> Self {
+        match body {
+            RigidBody::Dynamic => ColliderTreeType::Dynamic,
+            RigidBody::Kinematic => ColliderTreeType::Kinematic,
+            RigidBody::Static => ColliderTreeType::Static,
+        }
     }
 }

@@ -4,15 +4,19 @@ use core::marker::PhantomData;
 
 use crate::{
     collider_tree::{
-        ColliderTreeProxy, ColliderTreeProxyKey, ColliderTreeSystems, ColliderTrees, ProxyId,
-        tree::ColliderTreeProxyFlags,
+        ColliderTreeProxy, ColliderTreeProxyKey, ColliderTreeSystems, ColliderTreeType,
+        ColliderTrees, ProxyId, tree::ColliderTreeProxyFlags,
     },
     collision::{broad_phase::BroadPhaseDiagnostics, collider::EnlargedAabb},
     data_structures::bit_vec::BitVec,
     dynamics::solver::solver_body::SolverBody,
     prelude::*,
 };
-use bevy::{ecs::system::StaticSystemParam, platform::collections::HashSet, prelude::*};
+use bevy::{
+    ecs::{entity_disabling::Disabled, query::QueryFilter, system::StaticSystemParam},
+    platform::collections::HashSet,
+    prelude::*,
+};
 use obvhs::aabb::Aabb;
 #[cfg(feature = "parallel")]
 use thread_local::ThreadLocal;
@@ -29,12 +33,17 @@ impl<C: AnyCollider> Default for ColliderTreeUpdatePlugin<C> {
 impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
     fn build(&self, app: &mut App) {
         // Initialize resources.
-        app.init_resource::<MovedProxies>();
+        app.init_resource::<MovedProxies>()
+            .init_resource::<EnlargedProxies>();
 
         // Add systems for updating collider AABBs.
         app.add_systems(
             PhysicsSchedule,
-            (update_dynamic_aabbs::<C>, update_static_aabbs::<C>)
+            (
+                update_dynamic_kinematic_aabbs::<C>,
+                update_static_aabbs::<C>,
+                update_standalone_aabbs::<C>,
+            )
                 .chain()
                 .in_set(ColliderTreeSystems::UpdateAabbs)
                 // Allowing ambiguities is required so that it's possible
@@ -69,101 +78,286 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
             },
         );
 
+        // Aside from AABB updates, we need to handle the following cases:
+        //
+        // 1. On insert `C` or `ColliderOf`, add to new tree if not already present. Remove from old tree if present.
+        // 2. On remove `C`, remove from tree.
+        // 3. On remove `ColliderOf`, remove from tree, move to standalone tree if `C` still exists.
+        // 4. On re-enable `C`, add to tree.
+        // 5. On disable `C`, remove from tree.
+        // 6. On add `Sensor`, set sensor proxy flag.
+        // 7. On remove `Sensor`, unset sensor proxy flag.
+        // 8. On replace `CollisionLayers`, update proxy layers.
+        // 9. On replace `ActiveCollisionHooks`, set proxy flag.
+
+        // Case 1
+        app.add_observer(add_to_tree_on::<Add, (C, ColliderOf), Without<ColliderDisabled>>);
+
+        // Case 2
         app.add_observer(
-            |trigger: On<Add, ColliderOf>,
-             body_query: Query<&RigidBody>,
+            remove_from_tree_on::<Remove, C, (Without<Disabled>, Without<ColliderDisabled>)>,
+        );
+
+        // Case 3
+        app.add_observer(
+            |trigger: On<Remove, ColliderOf>,
              mut collider_query: Query<(
-                &ColliderOf,
+                &ColliderTreeProxyKey,
                 &ColliderAabb,
                 &EnlargedAabb,
-                &mut ColliderTreeProxyKey,
                 Option<&CollisionLayers>,
+                Has<Sensor>,
+                Option<&ActiveCollisionHooks>,
             )>,
-             mut trees: ResMut<ColliderTrees>| {
+             mut trees: ResMut<ColliderTrees>,
+             mut moved_proxies: ResMut<MovedProxies>| {
                 let entity = trigger.entity;
 
-                let Ok((collider_of, collider_aabb, enlarged_aabb, mut proxy_key, layers)) =
+                let Ok((proxy_key, collider_aabb, enlarged_aabb, layers, is_sensor, active_hooks)) =
                     collider_query.get_mut(entity)
                 else {
                     return;
                 };
-                let Ok(rb) = body_query.get(collider_of.body) else {
-                    return;
-                };
 
+                // Remove the proxy from its current tree.
+                let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+                tree.remove_proxy(proxy_key.id());
+
+                // If the collider still exists, move it to the standalone tree.
                 let aabb = Aabb::from(*collider_aabb);
                 let enlarged_aabb = Aabb::from(enlarged_aabb.get());
 
                 let proxy = ColliderTreeProxy {
-                    entity,
-                    body: collider_of.body,
+                    collider: entity,
+                    body: None,
                     layers: layers.copied().unwrap_or_default(),
                     aabb,
-                    flags: ColliderTreeProxyFlags::empty(),
+                    flags: ColliderTreeProxyFlags::new(
+                        is_sensor,
+                        active_hooks.copied().unwrap_or_default(),
+                    ),
                 };
 
-                // Insert the proxy into the appropriate tree.
-                let tree = trees.tree_for_body_mut(*rb);
-                let proxy_id = tree.add_proxy(enlarged_aabb, proxy);
+                let standalone_tree = &mut trees.standalone_tree;
+                let proxy_id = standalone_tree.add_proxy(enlarged_aabb, proxy);
+                let new_proxy_key =
+                    ColliderTreeProxyKey::new(proxy_id, ColliderTreeType::Standalone);
 
-                // Store the proxy key.
-                *proxy_key = ColliderTreeProxyKey::new(proxy_id, *rb);
+                // Mark the proxy as moved.
+                moved_proxies.insert(new_proxy_key);
             },
         );
 
-        // TODO: Remove proxies when colliders are removed or disabled.
+        // Cases 4
+        app.add_observer(add_to_tree_on::<Remove, Disabled, Without<ColliderDisabled>>);
+        app.add_observer(add_to_tree_on::<Remove, ColliderDisabled, Without<Disabled>>);
+
+        // Case 5
         app.add_observer(
-            |trigger: On<Remove, ColliderOf>,
-             collider_query: Query<&ColliderTreeProxyKey>,
+            remove_from_tree_on::<
+                Add,
+                (Disabled, ColliderDisabled),
+                (Without<Disabled>, Without<ColliderDisabled>),
+            >,
+        );
+
+        // Case 6
+        app.add_observer(
+            |trigger: On<Add, Sensor>,
+             mut collider_query: Query<&ColliderTreeProxyKey>,
              mut trees: ResMut<ColliderTrees>| {
                 let entity = trigger.entity;
 
-                let Ok(proxy_key) = collider_query.get(entity) else {
+                let Ok(proxy_key) = collider_query.get_mut(entity) else {
                     return;
                 };
 
-                let tree = trees.tree_for_body_mut(proxy_key.body());
-                tree.remove_proxy(proxy_key.id());
+                let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+
+                // Set sensor flag.
+                if let Some(proxy) = tree.get_proxy_mut(proxy_key.id()) {
+                    proxy.flags.insert(ColliderTreeProxyFlags::SENSOR);
+                }
+            },
+        );
+
+        // Case 7
+        app.add_observer(
+            |trigger: On<Remove, Sensor>,
+             mut collider_query: Query<&ColliderTreeProxyKey>,
+             mut trees: ResMut<ColliderTrees>| {
+                let entity = trigger.entity;
+
+                let Ok(proxy_key) = collider_query.get_mut(entity) else {
+                    return;
+                };
+
+                let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+
+                // Unset sensor flag.
+                if let Some(proxy) = tree.get_proxy_mut(proxy_key.id()) {
+                    proxy.flags.remove(ColliderTreeProxyFlags::SENSOR);
+                }
+            },
+        );
+
+        // Case 8
+        app.add_observer(
+            |trigger: On<Replace, CollisionLayers>,
+             mut collider_query: Query<(&ColliderTreeProxyKey, Option<&CollisionLayers>)>,
+             mut trees: ResMut<ColliderTrees>| {
+                let entity = trigger.entity;
+
+                let Ok((proxy_key, layers)) = collider_query.get_mut(entity) else {
+                    return;
+                };
+
+                let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+
+                // Update layers.
+                if let Some(proxy) = tree.get_proxy_mut(proxy_key.id()) {
+                    proxy.layers = layers.copied().unwrap_or_default();
+                }
+            },
+        );
+
+        // Case 9
+        app.add_observer(
+            |trigger: On<Replace, ActiveCollisionHooks>,
+             mut collider_query: Query<(&ColliderTreeProxyKey, Option<&ActiveCollisionHooks>)>,
+             mut trees: ResMut<ColliderTrees>| {
+                let entity = trigger.entity;
+
+                let Ok((proxy_key, active_hooks)) = collider_query.get_mut(entity) else {
+                    return;
+                };
+
+                let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+
+                // Update active hooks flags.
+                if let Some(proxy) = tree.get_proxy_mut(proxy_key.id()) {
+                    proxy.flags.set(
+                        ColliderTreeProxyFlags::CUSTOM_FILTER,
+                        active_hooks
+                            .is_some_and(|h| h.contains(ActiveCollisionHooks::FILTER_PAIRS)),
+                    );
+                }
             },
         );
     }
 }
 
-/// A resource for tracking proxies whose [`ColliderAabb`] has moved
-/// outside of the previous [`EnlargedAabb`].
+/// Adds a collider to the appropriate collider tree when the event `E` is triggered.
+fn add_to_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
+    trigger: On<E, B>,
+    body_query: Query<&RigidBody>,
+    mut collider_query: Query<
+        (
+            Option<&ColliderOf>,
+            &ColliderAabb,
+            &EnlargedAabb,
+            &mut ColliderTreeProxyKey,
+            Option<&CollisionLayers>,
+            Has<Sensor>,
+            Option<&ActiveCollisionHooks>,
+        ),
+        F,
+    >,
+    mut trees: ResMut<ColliderTrees>,
+    mut moved_proxies: ResMut<MovedProxies>,
+) {
+    let entity = trigger.event_target();
+
+    let Ok((
+        collider_of,
+        collider_aabb,
+        enlarged_aabb,
+        mut proxy_key,
+        layers,
+        is_sensor,
+        active_hooks,
+    )) = collider_query.get_mut(entity)
+    else {
+        return;
+    };
+
+    let tree_type = if let Some(Ok(rb)) = collider_of.map(|c| body_query.get(c.body)) {
+        ColliderTreeType::from_body(Some(*rb))
+    } else {
+        ColliderTreeType::Standalone
+    };
+
+    let aabb = Aabb::from(*collider_aabb);
+    let enlarged_aabb = Aabb::from(enlarged_aabb.get());
+
+    let proxy = ColliderTreeProxy {
+        collider: entity,
+        body: collider_of.map(|c| c.body),
+        layers: layers.copied().unwrap_or_default(),
+        aabb,
+        flags: ColliderTreeProxyFlags::new(is_sensor, active_hooks.copied().unwrap_or_default()),
+    };
+
+    // Remove the old proxy if it exists.
+    if *proxy_key != ColliderTreeProxyKey::PLACEHOLDER {
+        let old_tree_type = proxy_key.tree_type();
+        let old_tree = trees.tree_for_type_mut(old_tree_type);
+        old_tree.remove_proxy(proxy_key.id());
+    }
+
+    // Insert the proxy into the appropriate tree.
+    let tree = trees.tree_for_type_mut(tree_type);
+    let proxy_id = tree.add_proxy(enlarged_aabb, proxy);
+
+    // Store the proxy key.
+    *proxy_key = ColliderTreeProxyKey::new(proxy_id, tree_type);
+
+    // Mark the proxy as moved.
+    moved_proxies.insert(*proxy_key);
+}
+
+/// Removes a collider from its collider tree when the event `E` is triggered.
+fn remove_from_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
+    trigger: On<E, B>,
+    mut collider_query: Query<&mut ColliderTreeProxyKey, F>,
+    mut trees: ResMut<ColliderTrees>,
+) {
+    let entity = trigger.event_target();
+
+    let Ok(mut proxy_key) = collider_query.get_mut(entity) else {
+        return;
+    };
+
+    if *proxy_key == ColliderTreeProxyKey::PLACEHOLDER {
+        return;
+    }
+
+    // Remove the proxy from its current tree.
+    let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+    tree.remove_proxy(proxy_key.id());
+
+    // Invalidate the proxy key.
+    *proxy_key = ColliderTreeProxyKey::PLACEHOLDER;
+}
+
+/// A resource for tracking moved proxies.
+///
+/// Moved proxies are those whose [`ColliderAabb`] has moved outside of their
+/// previous [`EnlargedAabb`], or whose collider has been added to a [`ColliderTree`].
+///
+/// [`ColliderTree`]: crate::collider_tree::ColliderTree
 #[derive(Resource, Default)]
 pub struct MovedProxies {
-    /// A bit vector tracking moved proxies.
-    // TODO: It might be more logical to have these bit vectors in a separate resource.
-    bit_vec: MovedProxiesBitVec,
-    /// Thread-local bit vectors for tracking moved proxies in parallel.
-    ///
-    /// These are combined into [`bit_vec`](Self::bit_vec) after parallel processing.
-    thread_local_bit_vec: ThreadLocal<RefCell<MovedProxiesBitVec>>,
     /// A vector of moved proxy keys.
     proxies: Vec<ColliderTreeProxyKey>,
     /// A set of moved proxy keys for quick lookup.
     set: HashSet<ColliderTreeProxyKey>,
 }
 
-/// Bit vectors for tracking moved dynamic and kinematic proxies.
-///
-/// Set bits indicate [`ProxyId`]s of moved proxies.
-///
-/// [`ProxyId`]: crate::collider_tree::ProxyId
-#[derive(Default)]
-struct MovedProxiesBitVec {
-    // Note: Box2D indexes by shape ID, so it only needs one bit vector.
-    //       In our case, we would instead index by entity ID, but this would
-    //       require a potentially huge and very sparse bit vector since not
-    //       all entities are colliders. So we use separate bit vectors for
-    //       dynamic and kinematic bodies, and index by proxy ID instead.
-    dynamic: BitVec,
-    kinematic: BitVec,
-}
-
 impl MovedProxies {
     /// Returns the keys of the moved proxies.
+    ///
+    /// The order of the keys is the order in which they were inserted.
     #[inline]
     pub fn proxies(&self) -> &[ColliderTreeProxyKey] {
         &self.proxies
@@ -175,7 +369,52 @@ impl MovedProxies {
         self.set.contains(&proxy_key)
     }
 
-    /// Clears the moved proxies and sets the capacity of the internal structures.
+    /// Inserts a moved proxy key.
+    ///
+    /// If the proxy key is already present, it is not added again.
+    #[inline]
+    pub fn insert(&mut self, proxy_key: ColliderTreeProxyKey) {
+        if self.set.insert(proxy_key) {
+            self.proxies.push(proxy_key);
+        }
+    }
+
+    /// Clears the moved proxies.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.proxies.clear();
+        self.set.clear();
+    }
+}
+
+/// Bit vectors for tracking dynamic and kinematic proxies whose
+/// [`ColliderAabb`] has moved outside of the previous [`EnlargedAabb`].
+///
+/// Set bits indicate [`ProxyId`]s of moved proxies.
+#[derive(Resource, Default)]
+struct EnlargedProxies {
+    bit_vec: EnlargedProxiesBitVec,
+    thread_local_bit_vec: ThreadLocal<RefCell<EnlargedProxiesBitVec>>,
+}
+
+/// Bit vectors for tracking moved dynamic and kinematic proxies.
+///
+/// Set bits indicate [`ProxyId`]s of moved proxies.
+///
+/// [`ProxyId`]: crate::collider_tree::ProxyId
+#[derive(Default)]
+struct EnlargedProxiesBitVec {
+    // Note: Box2D indexes by shape ID, so it only needs one bit vector.
+    //       In our case, we would instead index by entity ID, but this would
+    //       require a potentially huge and very sparse bit vector since not
+    //       all entities are colliders. So we use separate bit vectors for
+    //       dynamic and kinematic bodies, and index by proxy ID instead.
+    dynamic: BitVec,
+    kinematic: BitVec,
+}
+
+impl EnlargedProxies {
+    /// Clears the enlarged proxies and sets the capacity of the internal structures.
     #[inline]
     pub fn clear_and_set_capacity(&mut self, dynamic_capacity: usize, kinematic_capacity: usize) {
         self.bit_vec
@@ -194,20 +433,9 @@ impl MovedProxies {
                 .kinematic
                 .set_bit_count_and_clear(kinematic_capacity);
         });
-
-        self.proxies.clear();
-        self.set.clear();
-
-        let capacity = dynamic_capacity.max(kinematic_capacity);
-        if self.proxies.capacity() < capacity {
-            self.proxies.reserve(capacity - self.proxies.capacity());
-        }
-        if self.set.capacity() < capacity {
-            self.set.reserve(capacity - self.set.capacity());
-        }
     }
 
-    /// Combines the thread-local moved proxy bit vectors into the main one.
+    /// Combines the thread-local enlarged proxy bit vectors into the main one.
     #[inline]
     pub fn combine_thread_local(&mut self) {
         let bit_vec = &mut self.bit_vec;
@@ -219,7 +447,8 @@ impl MovedProxies {
     }
 }
 
-fn update_dynamic_aabbs<C: AnyCollider>(
+/// Updates the AABBs of colliders attached to dynamic or kinematic rigid bodies.
+fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
     mut colliders: ParamSet<(
         Query<(
             Entity,
@@ -249,19 +478,21 @@ fn update_dynamic_aabbs<C: AnyCollider>(
     length_unit: Res<PhysicsLengthUnit>,
     mut collider_trees: ResMut<ColliderTrees>,
     mut moved_proxies: ResMut<MovedProxies>,
+    mut enlarged_proxies: ResMut<EnlargedProxies>,
     time: Res<Time>,
     collider_context: StaticSystemParam<C::Context>,
     mut diagnostics: ResMut<BroadPhaseDiagnostics>,
 ) {
     let start = crate::utils::Instant::now();
 
-    // An upper bound on the number of dynamic proxies, for sizing the bit vectors.
+    // An upper bound on the number of proxies, for sizing the bit vectors.
     // TODO: Use a better way to track the number of proxies.
     let max_num_dynamic_proxies = collider_trees.dynamic_tree.proxies.capacity();
     let max_num_kinematic_proxies = collider_trees.kinematic_tree.proxies.capacity();
 
-    // Clear and resize the moved proxy structures.
-    moved_proxies.clear_and_set_capacity(max_num_dynamic_proxies, max_num_kinematic_proxies);
+    // Clear and resize the enlarged proxy structures.
+    moved_proxies.clear();
+    enlarged_proxies.clear_and_set_capacity(max_num_dynamic_proxies, max_num_kinematic_proxies);
 
     let delta_secs = time.delta_seconds_adjusted();
     let default_speculative_margin = length_unit.0 * narrow_phase_config.default_speculative_margin;
@@ -345,10 +576,10 @@ fn update_dynamic_aabbs<C: AnyCollider>(
                 let moved = enlarged_aabb.update(&aabb, margin);
 
                 if moved {
-                    let mut thread_local_bit_vec = moved_proxies
+                    let mut thread_local_bit_vec = enlarged_proxies
                         .thread_local_bit_vec
                         .get_or(|| {
-                            let mut bit_vec = MovedProxiesBitVec::default();
+                            let mut bit_vec = EnlargedProxiesBitVec::default();
                             bit_vec
                                 .dynamic
                                 .set_bit_count_and_clear(max_num_dynamic_proxies);
@@ -359,16 +590,14 @@ fn update_dynamic_aabbs<C: AnyCollider>(
                         })
                         .borrow_mut();
                     match proxy_key.body() {
-                        RigidBody::Dynamic => {
+                        Some(RigidBody::Dynamic) => {
                             thread_local_bit_vec.dynamic.set(proxy_key.id().index())
                         }
-                        RigidBody::Kinematic => {
+                        Some(RigidBody::Kinematic) => {
                             thread_local_bit_vec.kinematic.set(proxy_key.id().index())
                         }
-                        RigidBody::Static => {
-                            unreachable!(
-                                "Static body proxy {proxy_key:?} moved in dynamic AABB update"
-                            )
+                        _ => {
+                            unreachable!("Static proxy {proxy_key:?} moved in dynamic AABB update")
                         }
                     }
                 }
@@ -377,17 +606,10 @@ fn update_dynamic_aabbs<C: AnyCollider>(
     );
 
     // Combine thread-local moved proxy bit vectors into the main one.
-    moved_proxies.combine_thread_local();
+    enlarged_proxies.combine_thread_local();
 
     // Serially enlarge moved proxies in the dynamic and kinematic tree.
     let aabbs = colliders.p1();
-
-    let MovedProxies {
-        bit_vec,
-        proxies: moved_proxies,
-        set: moved_set,
-        ..
-    } = &mut *moved_proxies;
 
     let ColliderTrees {
         dynamic_tree,
@@ -401,16 +623,24 @@ fn update_dynamic_aabbs<C: AnyCollider>(
     kinematic_tree.bvh.init_primitives_to_nodes_if_uninit();
 
     // TODO: This is kind of ugly, maybe just extract the inner loop into a function?
-    for (body_type, tree, bit_vec) in [
-        (RigidBody::Dynamic, dynamic_tree, &bit_vec.dynamic),
-        (RigidBody::Kinematic, kinematic_tree, &bit_vec.kinematic),
+    for (tree_type, tree, bit_vec) in [
+        (
+            ColliderTreeType::Dynamic,
+            dynamic_tree,
+            &enlarged_proxies.bit_vec.dynamic,
+        ),
+        (
+            ColliderTreeType::Kinematic,
+            kinematic_tree,
+            &enlarged_proxies.bit_vec.kinematic,
+        ),
     ] {
         for (i, mut bits) in bit_vec.blocks().enumerate() {
             while bits != 0 {
                 let trailing_zeros = bits.trailing_zeros();
                 let proxy_id = ProxyId::new(i as u32 * 64 + trailing_zeros);
                 let proxy = &mut tree.proxies[proxy_id.index()];
-                let entity = proxy.entity;
+                let entity = proxy.collider;
                 let (aabb, enlarged_aabb) = aabbs.get(entity).unwrap_or_else(|_| {
                     panic!(
                         "EnlargedAabb missing for moved collider entity {:?}",
@@ -426,10 +656,9 @@ fn update_dynamic_aabbs<C: AnyCollider>(
                 tree.set_proxy_aabb(proxy_id, enlarged_aabb);
 
                 // Record the moved proxy.
-                let proxy_key = ColliderTreeProxyKey::new(proxy_id, body_type);
+                let proxy_key = ColliderTreeProxyKey::new(proxy_id, tree_type);
                 tree.moved_proxies.push(proxy_id);
-                moved_proxies.push(proxy_key);
-                moved_set.insert(proxy_key);
+                moved_proxies.insert(proxy_key);
 
                 // Clear the least significant set bit
                 bits &= bits - 1;
@@ -445,6 +674,7 @@ fn update_dynamic_aabbs<C: AnyCollider>(
     diagnostics.update += start.elapsed();
 }
 
+/// Updates the AABBs of colliders attached to static rigid bodies.
 fn update_static_aabbs<C: AnyCollider>(
     static_bodies: Query<&RigidBodyColliders, (Without<SolverBody>, Without<Sleeping>)>,
     mut colliders: Query<
@@ -500,6 +730,59 @@ fn update_static_aabbs<C: AnyCollider>(
                 .static_tree
                 .reinsert_proxy(proxy_key.id(), Aabb::from(*aabb));
         }
+    }
+
+    diagnostics.update += start.elapsed();
+}
+
+/// Updates the AABBs of standalone colliders that are not attached to any rigid body.
+fn update_standalone_aabbs<C: AnyCollider>(
+    mut colliders: Query<
+        (
+            Entity,
+            &Position,
+            &Rotation,
+            &mut ColliderAabb,
+            &C,
+            Option<&CollisionMargin>,
+            &ColliderTreeProxyKey,
+        ),
+        (
+            Without<ColliderOf>,
+            Or<(Changed<Position>, Changed<Rotation>, Changed<C>)>,
+        ),
+    >,
+    narrow_phase_config: Res<NarrowPhaseConfig>,
+    length_unit: Res<PhysicsLengthUnit>,
+    mut collider_trees: ResMut<ColliderTrees>,
+    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    collider_context: StaticSystemParam<C::Context>,
+) {
+    let start = crate::utils::Instant::now();
+
+    let contact_tolerance = length_unit.0 * narrow_phase_config.contact_tolerance;
+
+    collider_trees
+        .standalone_tree
+        .bvh
+        .init_primitives_to_nodes_if_uninit();
+
+    for (entity, collider_pos, collider_rot, mut aabb, collider, margin, proxy_key) in
+        &mut colliders
+    {
+        let margin = margin.map_or(0.0, |margin| margin.0);
+
+        let context = AabbContext::new(entity, &*collider_context);
+
+        // Compute the AABB of the collider.
+        *aabb = collider
+            .aabb_with_context(collider_pos.0, *collider_rot, context)
+            .grow(Vector::splat(contact_tolerance + margin));
+
+        // Reinsert the proxy into the BVH.
+        collider_trees
+            .standalone_tree
+            .reinsert_proxy(proxy_key.id(), Aabb::from(*aabb));
     }
 
     diagnostics.update += start.elapsed();

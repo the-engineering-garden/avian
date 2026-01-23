@@ -7,6 +7,7 @@ use core::time::Duration;
 
 use crate::diagnostics::{PhysicsDiagnostics, impl_diagnostic_paths};
 
+// TODO: Split tree diagnostics and broad phase diagnostics, and rename find pairs.
 /// Diagnostics for collision detection.
 #[derive(Resource, Debug, Default, Reflect)]
 #[reflect(Resource, Debug)]

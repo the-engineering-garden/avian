@@ -217,8 +217,9 @@ impl CollisionHooks for () {}
 /// ```
 #[repr(transparent)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Component, Hash, Clone, Copy, PartialEq, Eq, Debug, Reflect)]
-#[reflect(opaque, Hash, PartialEq, Debug)]
+#[derive(Component, Hash, Clone, Copy, Default, PartialEq, Eq, Debug, Reflect)]
+#[component(immutable)]
+#[reflect(opaque, Hash, PartialEq, Debug, Default)]
 pub struct ActiveCollisionHooks(u8);
 
 bitflags::bitflags! {

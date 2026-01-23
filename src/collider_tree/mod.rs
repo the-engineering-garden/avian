@@ -27,7 +27,7 @@ mod tree;
 mod update;
 
 pub use optimization::{ColliderTreeOptimization, TreeOptimizationMode};
-pub use proxy_key::{ColliderTreeProxyKey, ProxyId};
+pub use proxy_key::{ColliderTreeProxyKey, ColliderTreeType, ProxyId};
 pub use tree::{ColliderTree, ColliderTreeProxy, ColliderTreeProxyFlags, ColliderTreeWorkspace};
 pub use update::MovedProxies;
 
@@ -109,28 +109,32 @@ pub struct ColliderTrees {
     pub dynamic_tree: ColliderTree,
     /// A tree for the colliders of kinematic bodies.
     pub kinematic_tree: ColliderTree,
-    /// A tree for the colliders of static bodies.
+    /// A tree for the colliders of static bodies and colliders with no body.
     pub static_tree: ColliderTree,
+    /// A tree for standalone colliders with no associated rigid body.
+    pub standalone_tree: ColliderTree,
 }
 
 impl ColliderTrees {
-    /// Returns the tree for the given body type.
+    /// Returns the tree for the given [`ColliderTreeType`].
     #[inline]
-    pub const fn tree_for_body(&self, body: RigidBody) -> &ColliderTree {
-        match body {
-            RigidBody::Dynamic => &self.dynamic_tree,
-            RigidBody::Kinematic => &self.kinematic_tree,
-            RigidBody::Static => &self.static_tree,
+    pub const fn tree_for_type(&self, tree_type: ColliderTreeType) -> &ColliderTree {
+        match tree_type {
+            ColliderTreeType::Dynamic => &self.dynamic_tree,
+            ColliderTreeType::Kinematic => &self.kinematic_tree,
+            ColliderTreeType::Static => &self.static_tree,
+            ColliderTreeType::Standalone => &self.standalone_tree,
         }
     }
 
-    /// Returns a mutable reference to the tree for the given body type.
+    /// Returns a mutable reference to the tree for the given [`ColliderTreeType`].
     #[inline]
-    pub const fn tree_for_body_mut(&mut self, body: RigidBody) -> &mut ColliderTree {
-        match body {
-            RigidBody::Dynamic => &mut self.dynamic_tree,
-            RigidBody::Kinematic => &mut self.kinematic_tree,
-            RigidBody::Static => &mut self.static_tree,
+    pub const fn tree_for_type_mut(&mut self, tree_type: ColliderTreeType) -> &mut ColliderTree {
+        match tree_type {
+            ColliderTreeType::Dynamic => &mut self.dynamic_tree,
+            ColliderTreeType::Kinematic => &mut self.kinematic_tree,
+            ColliderTreeType::Static => &mut self.static_tree,
+            ColliderTreeType::Standalone => &mut self.standalone_tree,
         }
     }
 }

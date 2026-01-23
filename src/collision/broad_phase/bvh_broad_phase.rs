@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use crate::{
     collider_tree::{
         ColliderTree, ColliderTreeProxy, ColliderTreeProxyFlags, ColliderTreeProxyKey,
-        ColliderTrees, MovedProxies, ProxyId,
+        ColliderTreeType, ColliderTrees, MovedProxies, ProxyId,
     },
     collision::broad_phase::BroadPhaseDiagnostics,
     data_structures::pair_key::PairKey,
@@ -74,16 +74,16 @@ fn collect_collision_pairs<H: CollisionHooks>(
             par_commands.command_scope(|mut commands| {
                 for proxy_key1 in proxies {
                     let proxy_id1 = proxy_key1.id();
-                    let proxy_type1 = proxy_key1.body();
+                    let proxy_type1 = proxy_key1.tree_type();
 
                     // Get the proxy from its appropriate tree.
-                    let tree = trees.tree_for_body(proxy_type1);
+                    let tree = trees.tree_for_type(proxy_type1);
                     let proxy1 = tree.get_proxy(proxy_key1.id()).unwrap();
 
                     // Query dynamic tree.
                     query_tree(
                         &trees.dynamic_tree,
-                        RigidBody::Dynamic,
+                        ColliderTreeType::Dynamic,
                         *proxy_key1,
                         proxy_id1,
                         proxy_type1,
@@ -99,7 +99,7 @@ fn collect_collision_pairs<H: CollisionHooks>(
                     // Query kinematic tree.
                     query_tree(
                         &trees.kinematic_tree,
-                        RigidBody::Kinematic,
+                        ColliderTreeType::Kinematic,
                         *proxy_key1,
                         proxy_id1,
                         proxy_type1,
@@ -112,15 +112,29 @@ fn collect_collision_pairs<H: CollisionHooks>(
                         &mut pairs,
                     );
 
-                    // Skip static-static collisions unless sensors are involved.
-                    if proxy1.is_static() && !proxy1.is_sensor() {
-                        continue;
+                    // Skip static-static body collisions unless sensors or standalone colliders are involved.
+                    if proxy_type1 != ColliderTreeType::Static || proxy1.is_sensor() {
+                        // Query static tree.
+                        query_tree(
+                            &trees.static_tree,
+                            ColliderTreeType::Static,
+                            *proxy_key1,
+                            proxy_id1,
+                            proxy_type1,
+                            proxy1,
+                            &moved_proxies,
+                            &hooks,
+                            &mut commands,
+                            &contact_graph,
+                            &joint_graph,
+                            &mut pairs,
+                        );
                     }
 
-                    // Query static tree.
+                    // Query standalone tree (colliders with no body).
                     query_tree(
-                        &trees.static_tree,
-                        RigidBody::Static,
+                        &trees.standalone_tree,
+                        ColliderTreeType::Standalone,
                         *proxy_key1,
                         proxy_id1,
                         proxy_type1,
@@ -173,10 +187,10 @@ fn collect_collision_pairs<H: CollisionHooks>(
 #[inline]
 fn query_tree(
     tree: &ColliderTree,
-    tree_type: RigidBody,
+    tree_type: ColliderTreeType,
     proxy_key1: ColliderTreeProxyKey,
     proxy_id1: ProxyId,
-    proxy_type1: RigidBody,
+    proxy_type1: ColliderTreeType,
     proxy1: &ColliderTreeProxy,
     moved_proxies: &MovedProxies,
     hooks: &impl CollisionHooks,
@@ -199,19 +213,22 @@ fn query_tree(
                 continue;
             }
 
+            let proxy2 = tree.get_proxy(proxy_id2).unwrap();
+
             // Avoid duplicate pairs for moving proxies.
+            //
             // Most of the time, only dynamic and kinematic bodies will be moving, but static bodies
             // can also be in the move set (ex: when spawned or teleported).
-            // TODO: Verify that this logic is correct for all cases.
-            //       It might be wrong for static-static sensors.
-            let other_greater = ((tree_type as u8) < (proxy_type1 as u8))
+            //
+            // If sensors are involved, we handle the pair here regardless of movement,
+            // just to be safe. Otherwise a static sensor colliding with a static body might be missed.
+            // TODO: There's probably a better way to handle sensors.
+            let proxy1_greater = ((tree_type as u8) < (proxy_type1 as u8))
                 || (tree_type == proxy_type1 && proxy_id2.id() < proxy_id1.id());
-            if other_greater && moved_proxies.contains(proxy_key2) {
+            if proxy1_greater && moved_proxies.contains(proxy_key2) && !proxy1.is_sensor() {
                 // Both proxies are moving, so the other query will handle this pair.
                 continue;
             }
-
-            let proxy2 = tree.get_proxy(proxy_id2).unwrap();
 
             // Check if the layers interact.
             if !proxy1.layers.interacts_with(proxy2.layers) {
@@ -223,8 +240,8 @@ fn query_tree(
                 continue;
             }
 
-            let entity1 = proxy1.entity;
-            let entity2 = proxy2.entity;
+            let entity1 = proxy1.collider;
+            let entity2 = proxy2.collider;
 
             // Avoid duplicate pairs.
             let pair_key = PairKey::new(entity1.index(), entity2.index());
@@ -233,9 +250,11 @@ fn query_tree(
             }
 
             // Check if a joint disables contacts between the two bodies.
-            if joint_graph
-                .joints_between(proxy1.body, proxy2.body)
-                .any(|edge| edge.collision_disabled)
+            if let Some(body1) = proxy1.body
+                && let Some(body2) = proxy2.body
+                && joint_graph
+                    .joints_between(body1, body2)
+                    .any(|edge| edge.collision_disabled)
             {
                 continue;
             }

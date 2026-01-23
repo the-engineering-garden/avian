@@ -12,7 +12,9 @@ use obvhs::{
 };
 
 use crate::{
-    collider_tree::ProxyId, data_structures::stable_vec::StableVec, prelude::CollisionLayers,
+    collider_tree::ProxyId,
+    data_structures::stable_vec::StableVec,
+    prelude::{ActiveCollisionHooks, CollisionLayers},
 };
 
 /// A [Bounding Volume Hierarchy (BVH)][BVH] for accelerating queries on a set of colliders.
@@ -36,10 +38,10 @@ pub struct ColliderTree {
 /// A proxy representing a collider in the [`ColliderTree`].
 #[derive(Clone, Debug)]
 pub struct ColliderTreeProxy {
-    /// The entity this proxy represents.
-    pub entity: Entity,
+    /// The collider entity this proxy represents.
+    pub collider: Entity,
     /// The body this collider is attached to.
-    pub body: Entity,
+    pub body: Option<Entity>,
     /// The tight AABB of the collider.
     pub aabb: Aabb,
     /// The collision layers of the collider.
@@ -56,45 +58,41 @@ pub struct ColliderTreeProxy {
 #[reflect(Debug, PartialEq)]
 pub struct ColliderTreeProxyFlags(u32);
 
-// TODO
 bitflags::bitflags! {
     impl ColliderTreeProxyFlags: u32 {
-        /// Set if the proxy belongs to a dynamic body.
-        const DYNAMIC = 1 << 0;
-        /// Set if the proxy belongs to a kinematic body.
-        const KINEMATIC = 1 << 1;
-        /// Set if the proxy belongs to a static body.
-        const STATIC = 1 << 2;
         /// Set if the collider is a sensor.
-        const SENSOR = 1 << 3;
+        const SENSOR = 1 << 0;
         /// Set if custom filtering is enabled via the `filter_pairs` hook.
-        const CUSTOM_FILTER = 1 << 4;
+        const CUSTOM_FILTER = 1 << 1;
+    }
+}
+
+impl ColliderTreeProxyFlags {
+    /// Creates [`ColliderTreeProxyFlags`] from the given sensor status and active collision hooks.
+    #[inline]
+    pub fn new(is_sensor: bool, active_hooks: ActiveCollisionHooks) -> Self {
+        let mut flags = ColliderTreeProxyFlags::empty();
+        if is_sensor {
+            flags |= ColliderTreeProxyFlags::SENSOR;
+        }
+        if active_hooks.contains(ActiveCollisionHooks::FILTER_PAIRS) {
+            flags |= ColliderTreeProxyFlags::CUSTOM_FILTER;
+        }
+        flags
     }
 }
 
 impl ColliderTreeProxy {
-    /// Returns `true` if the proxy belongs to a dynamic body.
-    #[inline]
-    pub fn is_dynamic(&self) -> bool {
-        self.flags.contains(ColliderTreeProxyFlags::DYNAMIC)
-    }
-
-    /// Returns `true` if the proxy belongs to a kinematic body.
-    #[inline]
-    pub fn is_kinematic(&self) -> bool {
-        self.flags.contains(ColliderTreeProxyFlags::KINEMATIC)
-    }
-
-    /// Returns `true` if the proxy belongs to a static body.
-    #[inline]
-    pub fn is_static(&self) -> bool {
-        self.flags.contains(ColliderTreeProxyFlags::STATIC)
-    }
-
     /// Returns `true` if the collider is a sensor.
     #[inline]
     pub fn is_sensor(&self) -> bool {
         self.flags.contains(ColliderTreeProxyFlags::SENSOR)
+    }
+
+    /// Returns `true` if custom filtering is enabled via the `filter_pairs` hook.
+    #[inline]
+    pub fn has_custom_filter(&self) -> bool {
+        self.flags.contains(ColliderTreeProxyFlags::CUSTOM_FILTER)
     }
 }
 
