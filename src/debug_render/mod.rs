@@ -7,6 +7,7 @@
 mod configuration;
 mod gizmos;
 
+use bevy_math::bounding::Aabb3d;
 pub use configuration::*;
 pub use gizmos::*;
 
@@ -255,18 +256,18 @@ fn debug_render_aabbs(
 fn debug_render_bvh(bvh: Res<ColliderTrees>, mut gizmos: Gizmos<PhysicsGizmos>) {
     for node in bvh.dynamic_tree.bvh.nodes.iter() {
         if node.prim_count == 0 {
-            gizmos.cuboid(
-                Transform::from_scale(node.aabb.diagonal().into())
-                    .with_translation(node.aabb.center().into()),
+            gizmos.aabb_3d(
+                Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
+                Transform::IDENTITY,
                 WHITE,
             );
         }
     }
     for node in bvh.static_tree.bvh.nodes.iter() {
         if node.prim_count == 0 {
-            gizmos.cuboid(
-                Transform::from_scale(node.aabb.diagonal().into())
-                    .with_translation(node.aabb.center().into()),
+            gizmos.aabb_3d(
+                Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
+                Transform::IDENTITY,
                 WHITE,
             );
         }
