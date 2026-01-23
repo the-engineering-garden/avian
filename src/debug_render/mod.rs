@@ -255,7 +255,7 @@ fn debug_render_aabbs(
 
 fn debug_render_bvh(bvh: Res<ColliderTrees>, mut gizmos: Gizmos<PhysicsGizmos>) {
     for node in bvh.dynamic_tree.bvh.nodes.iter() {
-        if node.prim_count == 0 {
+        if node.prim_count == 0 && node.aabb.valid() {
             gizmos.aabb_3d(
                 Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
                 Transform::IDENTITY,
@@ -264,7 +264,7 @@ fn debug_render_bvh(bvh: Res<ColliderTrees>, mut gizmos: Gizmos<PhysicsGizmos>) 
         }
     }
     for node in bvh.static_tree.bvh.nodes.iter() {
-        if node.prim_count == 0 {
+        if node.prim_count == 0 && node.aabb.valid() {
             gizmos.aabb_3d(
                 Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
                 Transform::IDENTITY,
