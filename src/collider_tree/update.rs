@@ -82,7 +82,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         //
         // 1. On insert `C` or `ColliderOf`, add to new tree if not already present. Remove from old tree if present.
         // 2. On remove `C`, remove from tree.
-        // 3. On remove `ColliderOf`, remove from tree, move to standalone tree if `C` still exists.
+        // 3. On remove `ColliderOf`, move to standalone tree if `C` still exists.
         // 4. On re-enable `C`, add to tree.
         // 5. On disable `C`, remove from tree.
         // 6. On add `Sensor`, set sensor proxy flag.
@@ -91,7 +91,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         // 9. On replace `ActiveCollisionHooks`, set proxy flag.
 
         // Case 1
-        app.add_observer(add_to_tree_on::<Add, (C, ColliderOf), Without<ColliderDisabled>>);
+        app.add_observer(add_to_tree_on::<Insert, (C, ColliderOf), Without<ColliderDisabled>>);
 
         // Case 2
         app.add_observer(
@@ -101,14 +101,17 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         // Case 3
         app.add_observer(
             |trigger: On<Remove, ColliderOf>,
-             mut collider_query: Query<(
-                &ColliderTreeProxyKey,
-                &ColliderAabb,
-                &EnlargedAabb,
-                Option<&CollisionLayers>,
-                Has<Sensor>,
-                Option<&ActiveCollisionHooks>,
-            )>,
+             mut collider_query: Query<
+                (
+                    &ColliderTreeProxyKey,
+                    &ColliderAabb,
+                    &EnlargedAabb,
+                    Option<&CollisionLayers>,
+                    Has<Sensor>,
+                    Option<&ActiveCollisionHooks>,
+                ),
+                With<C>,
+            >,
              mut trees: ResMut<ColliderTrees>,
              mut moved_proxies: ResMut<MovedProxies>| {
                 let entity = trigger.entity;
@@ -121,7 +124,9 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
 
                 // Remove the proxy from its current tree.
                 let tree = trees.tree_for_type_mut(proxy_key.tree_type());
-                tree.remove_proxy(proxy_key.id());
+                if !tree.remove_proxy(proxy_key.id()) {
+                    return;
+                }
 
                 // If the collider still exists, move it to the standalone tree.
                 let aabb = Aabb::from(*collider_aabb);

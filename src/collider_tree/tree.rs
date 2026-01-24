@@ -150,12 +150,16 @@ impl ColliderTree {
     }
 
     /// Removes a proxy from the tree.
+    ///
+    /// Returns `true` if the proxy was successfully removed, or `false` if the proxy ID was invalid.
     #[inline]
-    pub fn remove_proxy(&mut self, proxy_id: ProxyId) {
+    pub fn remove_proxy(&mut self, proxy_id: ProxyId) -> bool {
         if self.proxies.try_remove(proxy_id.index()).is_none() {
-            return;
+            false
+        } else {
+            self.bvh.remove_primitive(proxy_id.id());
+            true
         }
-        self.bvh.remove_primitive(proxy_id.id());
     }
 
     /// Gets a proxy from the tree by its ID.
