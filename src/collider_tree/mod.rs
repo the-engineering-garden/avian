@@ -21,11 +21,13 @@
 //! [`SpatialQuery`]: crate::spatial_query::SpatialQuery
 //! [`BvhBroadPhasePlugin`]: crate::collision::broad_phase::bvh::BvhBroadPhasePlugin
 
+mod diagnostics;
 mod optimization;
 mod proxy_key;
 mod tree;
 mod update;
 
+pub use diagnostics::ColliderTreeDiagnostics;
 pub use optimization::{ColliderTreeOptimization, TreeOptimizationMode};
 pub use proxy_key::{ColliderTreeProxyKey, ColliderTreeType, ProxyId};
 pub use tree::{ColliderTree, ColliderTreeProxy, ColliderTreeProxyFlags, ColliderTreeWorkspace};
@@ -84,6 +86,11 @@ impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
             PhysicsSchedule,
             ColliderTreeSystems::EndOptimize.in_set(PhysicsStepSystems::Finalize),
         );
+    }
+
+    fn finish(&self, app: &mut App) {
+        // Register timer diagnostics for collider trees.
+        app.register_physics_diagnostics::<ColliderTreeDiagnostics>();
     }
 }
 

@@ -3,11 +3,9 @@
 //!
 //! See [`PhysicsDiagnosticsPlugin`] for more information.
 
+use crate::collider_tree::ColliderTreeDiagnostics;
 use crate::dynamics::solver::constraint_graph::ConstraintGraph;
-use crate::{
-    collision::{CollisionDiagnostics, broad_phase::BroadPhaseDiagnostics},
-    dynamics::solver::SolverDiagnostics,
-};
+use crate::{collision::CollisionDiagnostics, dynamics::solver::SolverDiagnostics};
 use crate::{diagnostics::*, prelude::*};
 use bevy::color::palettes::tailwind::{GREEN_400, RED_400};
 use bevy::diagnostic::{DiagnosticPath, DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -239,12 +237,11 @@ fn build_diagnostic_texts(cmd: &mut RelatedSpawnerCommands<ChildOf>) {
     });
 
     // Collision detection and solver timers
+    type Collision = CollisionDiagnostics;
     type Solver = SolverDiagnostics;
     let collision_timers = vec![
-        ("Find Pairs", BroadPhaseDiagnostics::FIND_PAIRS),
-        ("Update AABBs", BroadPhaseDiagnostics::UPDATE),
-        ("Rebuild BVH", BroadPhaseDiagnostics::OPTIMIZE),
-        ("Narrow Phase", CollisionDiagnostics::NARROW_PHASE),
+        ("Broad Phase", Collision::BROAD_PHASE),
+        ("Narrow Phase", Collision::NARROW_PHASE),
     ];
     let solver_timers = vec![
         ("Prepare Constraints", Solver::PREPARE_CONSTRAINTS),
@@ -281,6 +278,15 @@ fn build_diagnostic_texts(cmd: &mut RelatedSpawnerCommands<ChildOf>) {
         .with_children(|cmd| {
             cmd.timer_texts(spatial_query_timers, AdaptiveTextSettings::new(0.0, 4.0));
         });
+
+    // Collider tree timers
+    let collider_tree_timers = vec![
+        ("Update AABBs", ColliderTreeDiagnostics::UPDATE),
+        ("Optimize Trees", ColliderTreeDiagnostics::OPTIMIZE),
+    ];
+    cmd.diagnostic_group("Collider Trees").with_children(|cmd| {
+        cmd.timer_texts(collider_tree_timers, AdaptiveTextSettings::new(0.0, 4.0));
+    });
 
     cmd.diagnostic_group("Other").with_children(|cmd| {
         cmd.timer_text(

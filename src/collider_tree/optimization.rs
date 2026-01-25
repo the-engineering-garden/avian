@@ -1,6 +1,7 @@
 use crate::{
-    collider_tree::{ColliderTree, ColliderTreeSystems, ColliderTrees, MovedProxies},
-    collision::broad_phase::BroadPhaseDiagnostics,
+    collider_tree::{
+        ColliderTree, ColliderTreeDiagnostics, ColliderTreeSystems, ColliderTrees, MovedProxies,
+    },
     prelude::*,
 };
 use bevy::{
@@ -158,7 +159,7 @@ fn optimize_trees(
     mut optimization: ResMut<OptimizationTask>,
     optimization_settings: Res<ColliderTreeOptimization>,
     moved_proxies: ResMut<MovedProxies>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    mut diagnostics: ResMut<ColliderTreeDiagnostics>,
 ) {
     let start = crate::utils::Instant::now();
 
@@ -244,7 +245,7 @@ fn block_on_optimize_trees(
     mut commands: Commands,
     mut collider_trees: ResMut<ColliderTrees>,
     mut optimization: ResMut<OptimizationTask>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    mut diagnostics: ResMut<ColliderTreeDiagnostics>,
 ) {
     let start = crate::utils::Instant::now();
 

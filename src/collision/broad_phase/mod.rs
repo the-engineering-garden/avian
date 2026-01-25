@@ -148,13 +148,12 @@
 //! # }
 //! ```
 
-mod diagnostics;
-pub use diagnostics::BroadPhaseDiagnostics;
-
 mod bvh_broad_phase;
 pub use bvh_broad_phase::BvhBroadPhasePlugin;
 
-use crate::{dynamics::solver::joint_graph::JointGraph, prelude::*};
+use crate::{
+    collision::CollisionDiagnostics, dynamics::solver::joint_graph::JointGraph, prelude::*,
+};
 use bevy::prelude::*;
 
 /// The core [broad phase](crate::collision::broad_phase) plugin that sets up the
@@ -187,8 +186,8 @@ impl Plugin for BroadPhaseCorePlugin {
     }
 
     fn finish(&self, app: &mut App) {
-        // Register timer diagnostics for the broad phase.
-        app.register_physics_diagnostics::<BroadPhaseDiagnostics>();
+        // Register timer diagnostics for collision detection.
+        app.register_physics_diagnostics::<CollisionDiagnostics>();
     }
 }
 

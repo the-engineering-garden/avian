@@ -4,10 +4,10 @@ use core::marker::PhantomData;
 
 use crate::{
     collider_tree::{
-        ColliderTreeProxy, ColliderTreeProxyKey, ColliderTreeSystems, ColliderTreeType,
-        ColliderTrees, ProxyId, tree::ColliderTreeProxyFlags,
+        ColliderTreeDiagnostics, ColliderTreeProxy, ColliderTreeProxyKey, ColliderTreeSystems,
+        ColliderTreeType, ColliderTrees, ProxyId, tree::ColliderTreeProxyFlags,
     },
-    collision::{broad_phase::BroadPhaseDiagnostics, collider::EnlargedAabb},
+    collision::collider::EnlargedAabb,
     data_structures::bit_vec::BitVec,
     dynamics::solver::solver_body::SolverBody,
     prelude::*,
@@ -602,7 +602,7 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
     mut enlarged_proxies: ResMut<EnlargedProxies>,
     time: Res<Time>,
     collider_context: StaticSystemParam<C::Context>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    mut diagnostics: ResMut<ColliderTreeDiagnostics>,
     mut last_tick: ResMut<LastDynamicKinematicAabbUpdate>,
     system_tick: SystemChangeTick,
 ) {
@@ -827,7 +827,7 @@ fn update_static_aabbs<C: AnyCollider>(
     narrow_phase_config: Res<NarrowPhaseConfig>,
     length_unit: Res<PhysicsLengthUnit>,
     mut collider_trees: ResMut<ColliderTrees>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    mut diagnostics: ResMut<ColliderTreeDiagnostics>,
     collider_context: StaticSystemParam<C::Context>,
 ) {
     let start = crate::utils::Instant::now();
@@ -892,7 +892,7 @@ fn update_standalone_aabbs<C: AnyCollider>(
     narrow_phase_config: Res<NarrowPhaseConfig>,
     length_unit: Res<PhysicsLengthUnit>,
     mut collider_trees: ResMut<ColliderTrees>,
-    mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    mut diagnostics: ResMut<ColliderTreeDiagnostics>,
     collider_context: StaticSystemParam<C::Context>,
 ) {
     let start = crate::utils::Instant::now();
