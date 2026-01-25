@@ -78,6 +78,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                 &Rotation,
                 Option<&CollisionMargin>,
                 &mut ColliderAabb,
+                &mut EnlargedAabb,
             )>,
              narrow_phase_config: Res<NarrowPhaseConfig>,
              length_unit: Res<PhysicsLengthUnit>,
@@ -85,13 +86,14 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                 let contact_tolerance = length_unit.0 * narrow_phase_config.contact_tolerance;
                 let aabb_context = AabbContext::new(trigger.entity, &*collider_context);
 
-                if let Ok((collider, pos, rot, collision_margin, mut aabb)) =
+                if let Ok((collider, pos, rot, collision_margin, mut aabb, mut enlarged_aabb)) =
                     query.get_mut(trigger.entity)
                 {
                     let collision_margin = collision_margin.map_or(0.0, |m| m.0);
                     *aabb = collider
                         .aabb_with_context(pos.0, *rot, aabb_context)
                         .grow(Vector::splat(contact_tolerance + collision_margin));
+                    enlarged_aabb.update(&aabb, 0.0);
                 }
             },
         );
@@ -113,9 +115,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         app.add_observer(add_to_tree_on::<Insert, (C, ColliderOf), Without<ColliderDisabled>>);
 
         // Case 2
-        app.add_observer(
-            remove_from_tree_on::<Remove, C, (Without<Disabled>, Without<ColliderDisabled>)>,
-        );
+        app.add_observer(remove_from_tree_on::<Remove, C, Without<ColliderDisabled>>);
 
         // Case 3
         app.add_observer(
@@ -816,6 +816,7 @@ fn update_static_aabbs<C: AnyCollider>(
             &Position,
             &Rotation,
             &mut ColliderAabb,
+            &mut EnlargedAabb,
             &C,
             Option<&CollisionMargin>,
             &ColliderTreeProxyKey,
@@ -841,6 +842,7 @@ fn update_static_aabbs<C: AnyCollider>(
         .init_primitives_to_nodes_if_uninit();
 
     // TODO: Parallelize this and/or avoid iterating over all static bodies.
+    // TODO: Enlarged AABBs are not really needed for static colliders.
     for body_colliders in &static_bodies {
         let mut iter = colliders.iter_many_mut(body_colliders.iter());
         while let Some((
@@ -848,6 +850,7 @@ fn update_static_aabbs<C: AnyCollider>(
             collider_pos,
             collider_rot,
             mut aabb,
+            mut enlarged_aabb,
             collider,
             margin,
             proxy_key,
@@ -861,6 +864,7 @@ fn update_static_aabbs<C: AnyCollider>(
             *aabb = collider
                 .aabb_with_context(collider_pos.0, *collider_rot, context)
                 .grow(Vector::splat(contact_tolerance + margin));
+            enlarged_aabb.update(&aabb, 0.0);
 
             // Reinsert the proxy into the BVH.
             collider_trees
@@ -880,6 +884,7 @@ fn update_standalone_aabbs<C: AnyCollider>(
             &Position,
             &Rotation,
             &mut ColliderAabb,
+            &mut EnlargedAabb,
             &C,
             Option<&CollisionMargin>,
             &ColliderTreeProxyKey,
@@ -905,8 +910,16 @@ fn update_standalone_aabbs<C: AnyCollider>(
         .bvh
         .init_primitives_to_nodes_if_uninit();
 
-    for (entity, collider_pos, collider_rot, mut aabb, collider, margin, proxy_key) in
-        &mut colliders
+    for (
+        entity,
+        collider_pos,
+        collider_rot,
+        mut aabb,
+        mut enlarged_aabb,
+        collider,
+        margin,
+        proxy_key,
+    ) in &mut colliders
     {
         let margin = margin.map_or(0.0, |margin| margin.0);
 
@@ -916,6 +929,7 @@ fn update_standalone_aabbs<C: AnyCollider>(
         *aabb = collider
             .aabb_with_context(collider_pos.0, *collider_rot, context)
             .grow(Vector::splat(contact_tolerance + margin));
+        enlarged_aabb.update(&aabb, 0.0);
 
         // Reinsert the proxy into the BVH.
         collider_trees
