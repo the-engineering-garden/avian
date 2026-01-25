@@ -30,7 +30,7 @@ impl Plugin for ColliderTreeOptimizationPlugin {
 }
 
 /// Settings for optimizing the dynamic [`ColliderTree`].
-#[derive(Resource, Debug, Default, Reflect)]
+#[derive(Resource, Debug, Default, PartialEq, Reflect)]
 pub struct ColliderTreeOptimization {
     /// If `true`, tree optimization will be performed in-place with minimal allocations.
     /// This has the downside that the tree will be unavailable for [spatial queries]
@@ -56,7 +56,7 @@ pub struct ColliderTreeOptimization {
 }
 
 /// The optimization mode for a dynamic [`ColliderTree`].
-#[derive(Clone, Copy, Debug, Reflect)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum TreeOptimizationMode {
     /// The tree is optimized by reinserting [moved proxies](`MovedProxies`).
     ///

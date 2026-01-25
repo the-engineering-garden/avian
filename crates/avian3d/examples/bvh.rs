@@ -12,7 +12,8 @@ use bevy::{
     color::palettes::tailwind::GRAY_400,
     feathers::{
         FeathersPlugins,
-        controls::{SliderProps, radio, slider},
+        constants::fonts::{BOLD, REGULAR},
+        controls::{SliderProps, checkbox, radio, slider},
         dark_theme::create_dark_theme,
         theme::UiTheme,
     },
@@ -31,7 +32,13 @@ fn main() {
 
     // Add plugins relevant to the example.
     app.add_plugins((
-        DefaultPlugins,
+        DefaultPlugins.build().set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "App".to_string(),
+                ..default()
+            }),
+            ..default()
+        }),
         FeathersPlugins,
         ExampleCommonPlugin,
         PhysicsDebugPlugin,
@@ -55,7 +62,11 @@ fn main() {
 
     // Configure gizmos and initialize example settings.
     app.insert_gizmo_config(
-        PhysicsGizmos::none().with_aabb_color(GRAY_400.into()),
+        PhysicsGizmos {
+            aabb_color: Some(GRAY_400.into()),
+            collider_tree_color: Some(Color::WHITE),
+            ..PhysicsGizmos::none()
+        },
         GizmoConfig {
             line: GizmoLineConfig {
                 width: 0.5,
@@ -165,21 +176,31 @@ fn move_random(mut query: Query<&mut Position>, settings: Res<BvhExampleSettings
 // === UI Setup ===
 
 #[derive(Component)]
+struct OptimizationModeRadio(TreeOptimizationMode);
+
+#[derive(Component)]
 struct GridSizeRadio(usize);
 
 // TODO: Change optimization settings at runtime.
-fn setup_ui(mut commands: Commands, settings: Res<BvhExampleSettings>) {
+fn setup_ui(
+    mut commands: Commands,
+    settings: Res<BvhExampleSettings>,
+    asset_server: Res<AssetServer>,
+) {
+    let regular: Handle<Font> = asset_server.load(REGULAR);
+    let bold: Handle<Font> = asset_server.load(BOLD);
+
     commands.spawn((
         Name::new("Example Settings UI"),
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(5.0),
-            left: Val::Px(5.0),
+            right: Val::Px(5.0),
             width: Val::Px(270.0),
             padding: UiRect::all(Val::Px(10.0)),
             border_radius: BorderRadius::all(Val::Px(5.0)),
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(20.0),
+            row_gap: Val::Px(15.0),
             ..default()
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
@@ -187,11 +208,92 @@ fn setup_ui(mut commands: Commands, settings: Res<BvhExampleSettings>) {
             (
                 Node {
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
+                    row_gap: Val::Px(5.0),
                     ..default()
                 },
                 children![
-                    (Text::new("Grid Size"), TextFont::from_font_size(16.0)),
+                    (
+                        Text::new("Optimization Mode"),
+                        TextFont::from_font_size(14.0).with_font(bold.clone())
+                    ),
+                    (
+                        Node {
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(5),
+                            ..default()
+                        },
+                        RadioGroup,
+                        observe(
+                            |value_change: On<ValueChange<Entity>>,
+                             radio_buttons: Query<
+                                (Entity, &OptimizationModeRadio),
+                                With<RadioButton>,
+                            >,
+                             mut settings: ResMut<ColliderTreeOptimization>,
+                             mut commands: Commands| {
+                                for (entity, optimization_mode) in radio_buttons.iter() {
+                                    if entity == value_change.value {
+                                        commands.entity(entity).insert(Checked);
+                                        if optimization_mode.0 == settings.optimization_mode {
+                                            continue;
+                                        }
+                                        settings.optimization_mode = optimization_mode.0;
+                                        commands.run_system_cached(clear_scene);
+                                        commands.run_system_cached(setup_scene);
+                                    } else {
+                                        commands.entity(entity).remove::<Checked>();
+                                    }
+                                }
+                            }
+                        ),
+                        children![
+                            radio(
+                                OptimizationModeRadio(TreeOptimizationMode::Reinsert),
+                                Spawn((
+                                    Text::new("Reinsert"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
+                            ),
+                            radio(
+                                OptimizationModeRadio(TreeOptimizationMode::PartialRebuild),
+                                Spawn((
+                                    Text::new("Partial Rebuild"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
+                            ),
+                            radio(
+                                OptimizationModeRadio(TreeOptimizationMode::FullRebuild),
+                                Spawn((
+                                    Text::new("Full Rebuild"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
+                            ),
+                            radio(
+                                (
+                                    Checked,
+                                    OptimizationModeRadio(TreeOptimizationMode::default())
+                                ),
+                                Spawn((
+                                    Text::new("Adaptive"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
+                            ),
+                        ]
+                    ),
+                ],
+            ),
+            (
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(5.0),
+                    ..default()
+                },
+                children![
+                    (
+                        Text::new("Grid Size"),
+                        TextFont::from_font_size(14.0).with_font(bold.clone())
+                    ),
                     (
                         Node {
                             display: Display::Flex,
@@ -224,15 +326,24 @@ fn setup_ui(mut commands: Commands, settings: Res<BvhExampleSettings>) {
                         children![
                             radio(
                                 GridSizeRadio(10),
-                                Spawn((Text::new("10x10"), TextFont::from_font_size(14.0)))
+                                Spawn((
+                                    Text::new("10x10"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
                             ),
                             radio(
                                 (Checked, GridSizeRadio(50)),
-                                Spawn((Text::new("50x50"), TextFont::from_font_size(14.0)))
+                                Spawn((
+                                    Text::new("50x50"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
                             ),
                             radio(
                                 GridSizeRadio(100),
-                                Spawn((Text::new("100x100"), TextFont::from_font_size(14.0)))
+                                Spawn((
+                                    Text::new("100x100"),
+                                    TextFont::from_font_size(13.0).with_font(regular.clone())
+                                ))
                             ),
                         ]
                     ),
@@ -241,17 +352,20 @@ fn setup_ui(mut commands: Commands, settings: Res<BvhExampleSettings>) {
             (
                 Node {
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
+                    row_gap: Val::Px(5.0),
                     ..default()
                 },
                 children![
-                    (Text::new("Move Fraction"), TextFont::from_font_size(16.0)),
+                    (
+                        Text::new("Move Fraction"),
+                        TextFont::from_font_size(14.0).with_font(bold.clone())
+                    ),
                     (
                         slider(
                             SliderProps {
                                 min: 0.0,
                                 max: 1.0,
-                                value: settings.delta_fraction,
+                                value: settings.move_fraction,
                             },
                             (SliderStep(0.05), SliderPrecision(2)),
                         ),
@@ -268,11 +382,14 @@ fn setup_ui(mut commands: Commands, settings: Res<BvhExampleSettings>) {
             (
                 Node {
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
+                    row_gap: Val::Px(5.0),
                     ..default()
                 },
                 children![
-                    (Text::new("Delta Fraction"), TextFont::from_font_size(16.0)),
+                    (
+                        Text::new("Delta Fraction"),
+                        TextFont::from_font_size(14.0).with_font(bold.clone())
+                    ),
                     (
                         slider(
                             SliderProps {
@@ -291,7 +408,66 @@ fn setup_ui(mut commands: Commands, settings: Res<BvhExampleSettings>) {
                         ),
                     )
                 ],
-            )
+            ),
+            (
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(5.0),
+                    ..default()
+                },
+                children![
+                    (
+                        Text::new("BVH Debug Rendering"),
+                        TextFont::from_font_size(14.0).with_font(bold)
+                    ),
+                    (
+                        checkbox(
+                            Checked,
+                            Spawn((
+                                Text::new("Draw Internal Nodes"),
+                                TextFont::from_font_size(13.0).with_font(regular.clone())
+                            ))
+                        ),
+                        observe(
+                            |change: On<ValueChange<bool>>,
+                             mut gizmo_store: ResMut<GizmoConfigStore>,
+                             mut commands: Commands| {
+                                let gizmo_config = gizmo_store.config_mut::<PhysicsGizmos>().1;
+                                if change.value {
+                                    gizmo_config.collider_tree_color = Some(Color::WHITE);
+                                    commands.entity(change.source).insert(Checked);
+                                } else {
+                                    gizmo_config.collider_tree_color = None;
+                                    commands.entity(change.source).remove::<Checked>();
+                                }
+                            },
+                        )
+                    ),
+                    (
+                        checkbox(
+                            Checked,
+                            Spawn((
+                                Text::new("Draw Leaf Nodes"),
+                                TextFont::from_font_size(13.0).with_font(regular)
+                            ))
+                        ),
+                        observe(
+                            |change: On<ValueChange<bool>>,
+                             mut gizmo_store: ResMut<GizmoConfigStore>,
+                             mut commands: Commands| {
+                                let gizmo_config = gizmo_store.config_mut::<PhysicsGizmos>().1;
+                                if change.value {
+                                    gizmo_config.aabb_color = Some(GRAY_400.into());
+                                    commands.entity(change.source).insert(Checked);
+                                } else {
+                                    gizmo_config.aabb_color = None;
+                                    commands.entity(change.source).remove::<Checked>();
+                                }
+                            },
+                        )
+                    )
+                ],
+            ),
         ],
     ));
 }
