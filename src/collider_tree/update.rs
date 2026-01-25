@@ -13,7 +13,12 @@ use crate::{
     prelude::*,
 };
 use bevy::{
-    ecs::{entity_disabling::Disabled, query::QueryFilter, system::StaticSystemParam},
+    ecs::{
+        change_detection::Tick,
+        entity_disabling::Disabled,
+        query::QueryFilter,
+        system::{StaticSystemParam, SystemChangeTick},
+    },
     platform::collections::HashSet,
     prelude::*,
 };
@@ -36,9 +41,11 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
     fn build(&self, app: &mut App) {
         // Initialize resources.
         app.init_resource::<MovedProxies>()
-            .init_resource::<EnlargedProxies>();
+            .init_resource::<EnlargedProxies>()
+            .init_resource::<LastDynamicKinematicAabbUpdate>();
 
-        // Add systems for updating collider AABBs.
+        // Add systems for updating collider AABBs before physics step.
+        // This accounts for manually moved colliders.
         app.add_systems(
             PhysicsSchedule,
             (
@@ -53,10 +60,13 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                 .ambiguous_with_all(),
         );
 
-        // Clear moved proxies after broad phase.
+        // Clear moved proxies and update dynamic and kinematic collider AABBs.
         app.add_systems(
             PhysicsSchedule,
-            clear_moved_proxies.after(ColliderTreeSystems::EndOptimize),
+            (clear_moved_proxies, update_dynamic_kinematic_aabbs::<C>)
+                .chain()
+                .after(PhysicsStepSystems::Finalize)
+                .before(PhysicsStepSystems::Last),
         );
 
         // Initialize `ColliderAabb` for colliders.
@@ -433,6 +443,11 @@ fn remove_from_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
     *proxy_key = ColliderTreeProxyKey::PLACEHOLDER;
 }
 
+/// A resource for tracking the last system change tick
+/// when dynamic or kinematic collider AABBs were updated.
+#[derive(Resource, Default)]
+struct LastDynamicKinematicAabbUpdate(Tick);
+
 /// A resource for tracking moved proxies.
 ///
 /// Moved proxies are those whose [`ColliderAabb`] has moved outside of their
@@ -554,16 +569,16 @@ impl EnlargedProxies {
 }
 
 /// Updates the AABBs of colliders attached to dynamic or kinematic rigid bodies.
+// TODO: Optimize the change detection.
 fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
     mut colliders: ParamSet<(
         Query<(
-            Entity,
-            &C,
+            Ref<C>,
             &mut ColliderAabb,
             &mut EnlargedAabb,
             &ColliderTreeProxyKey,
-            &Position,
-            &Rotation,
+            Ref<Position>,
+            Ref<Rotation>,
             Option<&CollisionMargin>,
             Option<&SpeculativeMargin>,
         )>,
@@ -588,8 +603,12 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
     time: Res<Time>,
     collider_context: StaticSystemParam<C::Context>,
     mut diagnostics: ResMut<BroadPhaseDiagnostics>,
+    mut last_tick: ResMut<LastDynamicKinematicAabbUpdate>,
+    system_tick: SystemChangeTick,
 ) {
     let start = crate::utils::Instant::now();
+
+    let this_run = system_tick.this_run();
 
     // An upper bound on the number of proxies, for sizing the bit vectors.
     // TODO: Use a better way to track the number of proxies.
@@ -615,7 +634,6 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
         |(rb_pos, center_of_mass, lin_vel, ang_vel, body_colliders, has_swept_ccd)| {
             for collider_entity in body_colliders.iter() {
                 let Ok((
-                    entity,
                     collider,
                     mut aabb,
                     mut enlarged_aabb,
@@ -629,6 +647,14 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
                     continue;
                 };
 
+                // Skip if the collider's AABB can't have changed since the last physics tick.
+                if !pos.last_changed().is_newer_than(last_tick.0, this_run)
+                    && !rot.last_changed().is_newer_than(last_tick.0, this_run)
+                    && !collider.last_changed().is_newer_than(last_tick.0, this_run)
+                {
+                    continue;
+                }
+
                 let collision_margin = collision_margin.map_or(0.0, |margin| margin.0);
                 let speculative_margin = if has_swept_ccd {
                     Scalar::MAX
@@ -636,7 +662,7 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
                     speculative_margin.map_or(default_speculative_margin, |margin| margin.0)
                 };
 
-                let context = AabbContext::new(entity, &*collider_context);
+                let context = AabbContext::new(collider_entity, &*collider_context);
 
                 if speculative_margin <= 0.0 {
                     *aabb = collider
@@ -774,9 +800,15 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
         tree.bvh.refit_all();
     }
 
+    // Update the last update tick.
+    last_tick.0 = this_run;
+
     diagnostics.update += start.elapsed();
 }
 
+// TODO: If we tagged static colliders with their own marker component,
+//       we could avoid querying for the bodies, and merge this with the
+//       standalone collider AABB update.
 /// Updates the AABBs of colliders attached to static rigid bodies.
 fn update_static_aabbs<C: AnyCollider>(
     static_bodies: Query<&RigidBodyColliders, (Without<SolverBody>, Without<Sleeping>)>,
