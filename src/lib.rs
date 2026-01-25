@@ -621,6 +621,7 @@ use prelude::*;
 /// | [`PhysicsDiagnosticsPlugin`]      | Writes [physics diagnostics](diagnostics) to the [`DiagnosticsStore`] (only with `bevy_diagnostic` feature enabled).                                       |
 /// | [`PhysicsDiagnosticsUiPlugin`]    | Displays [physics diagnostics](diagnostics) with a debug UI overlay (only with `diagnostic_ui` feature enabled).                                           |
 ///
+/// [`ColliderTrees`]: collider_tree::ColliderTrees
 /// [broad phase]: collision::broad_phase
 /// [BVH]: https://en.wikipedia.org/wiki/Bounding_volume_hierarchy
 /// [`DiagnosticsStore`]: bevy::diagnostic::DiagnosticsStore

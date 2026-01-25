@@ -41,7 +41,7 @@ use core::marker::PhantomData;
 use crate::prelude::*;
 use bevy::prelude::*;
 
-/// A plugin that manages [`ColliderTrees`] for a collider type `C`.
+/// A plugin that manages [collider trees](crate::collider_tree) for a collider type `C`.
 pub struct ColliderTreePlugin<C: AnyCollider>(PhantomData<C>);
 
 impl<C: AnyCollider> Default for ColliderTreePlugin<C> {
@@ -110,6 +110,8 @@ pub enum ColliderTreeSystems {
 }
 
 /// Trees for accelerating queries on a set of colliders.
+///
+/// See the [`collider_tree`](crate::collider_tree) module for more information.
 #[derive(Resource, Default)]
 pub struct ColliderTrees {
     /// A tree for the colliders of dynamic bodies.

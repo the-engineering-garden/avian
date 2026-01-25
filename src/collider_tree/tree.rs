@@ -20,6 +20,8 @@ use crate::{
 
 /// A [Bounding Volume Hierarchy (BVH)][BVH] for accelerating queries on a set of colliders.
 ///
+/// See the [`collider_tree`](crate::collider_tree) module for more information.
+///
 /// [BVH]: https://en.wikipedia.org/wiki/Bounding_volume_hierarchy
 #[derive(Clone, Default)]
 pub struct ColliderTree {
