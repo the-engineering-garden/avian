@@ -21,7 +21,6 @@ use crate::{
 };
 use bevy::{
     camera::visibility::VisibilitySystems,
-    color::palettes::css::WHITE,
     ecs::{
         query::Has,
         system::{StaticSystemParam, SystemParam, SystemParamItem},
@@ -43,6 +42,7 @@ use bevy::{
 /// - [`RayCaster`]
 /// - [`ShapeCaster`]
 /// - [Simulation islands](dynamics::solver::islands)
+/// - [Collider tree](crate::collider_tree) nodes
 /// - Changing the visibility of entities to only show debug rendering
 ///
 /// By default, [AABBs](ColliderAabb) and [contacts](ContactPair) are not debug rendered.
@@ -253,13 +253,23 @@ fn debug_render_aabbs(
     }
 }
 
-fn debug_render_bvh(bvh: Res<ColliderTrees>, mut gizmos: Gizmos<PhysicsGizmos>) {
+fn debug_render_bvh(
+    bvh: Res<ColliderTrees>,
+    mut gizmos: Gizmos<PhysicsGizmos>,
+    store: Res<GizmoConfigStore>,
+) {
+    let config = store.config::<PhysicsGizmos>().1;
+
+    let Some(collider_tree_color) = config.collider_tree_color else {
+        return;
+    };
+
     for node in bvh.dynamic_tree.bvh.nodes.iter() {
         if node.prim_count == 0 && node.aabb.valid() {
             gizmos.aabb_3d(
                 Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
                 Transform::IDENTITY,
-                WHITE,
+                collider_tree_color,
             );
         }
     }
@@ -268,7 +278,7 @@ fn debug_render_bvh(bvh: Res<ColliderTrees>, mut gizmos: Gizmos<PhysicsGizmos>) 
             gizmos.aabb_3d(
                 Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
                 Transform::IDENTITY,
-                WHITE,
+                collider_tree_color,
             );
         }
     }

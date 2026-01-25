@@ -85,6 +85,8 @@ pub struct PhysicsGizmos {
     pub shapecast_normal_color: Option<Color>,
     /// The color used for the bounds of [`PhysicsIsland`](dynamics::solver::islands::PhysicsIsland)s.
     pub island_color: Option<Color>,
+    /// The color used for [`ColliderTree`](crate::collider_tree) nodes.
+    pub collider_tree_color: Option<Color>,
     /// Determines if the visibility of entities with [colliders](Collider) should be set to `Visibility::Hidden`,
     /// which will only show the debug renders.
     pub hide_meshes: bool,
@@ -110,6 +112,7 @@ impl Default for PhysicsGizmos {
             shapecast_point_color: Some(YELLOW.into()),
             shapecast_normal_color: Some(PINK.into()),
             island_color: None,
+            collider_tree_color: None,
             hide_meshes: false,
         }
     }
@@ -154,6 +157,7 @@ impl PhysicsGizmos {
             shapecast_point_color: Some(YELLOW.into()),
             shapecast_normal_color: Some(PINK.into()),
             island_color: Some(RED.into()),
+            collider_tree_color: Some(Color::WHITE),
             hide_meshes: true,
         }
     }
@@ -180,6 +184,7 @@ impl PhysicsGizmos {
             shapecast_point_color: None,
             shapecast_normal_color: None,
             island_color: None,
+            collider_tree_color: None,
             hide_meshes: false,
         }
     }
