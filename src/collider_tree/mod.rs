@@ -78,7 +78,7 @@ impl<C: AnyCollider> Plugin for ColliderTreePlugin<C> {
         );
         app.configure_sets(
             PhysicsSchedule,
-            ColliderTreeSystems::BeginOptimize.in_set(NarrowPhaseSystems::Update),
+            ColliderTreeSystems::BeginOptimize.in_set(BroadPhaseSystems::Last),
         );
         app.configure_sets(
             PhysicsSchedule,

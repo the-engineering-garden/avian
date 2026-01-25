@@ -154,7 +154,7 @@ pub use diagnostics::BroadPhaseDiagnostics;
 mod bvh_broad_phase;
 pub use bvh_broad_phase::BvhBroadPhasePlugin;
 
-use crate::prelude::*;
+use crate::{dynamics::solver::joint_graph::JointGraph, prelude::*};
 use bevy::prelude::*;
 
 /// The core [broad phase](crate::collision::broad_phase) plugin that sets up the
@@ -171,7 +171,8 @@ pub struct BroadPhaseCorePlugin;
 
 impl Plugin for BroadPhaseCorePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ContactGraph>();
+        app.init_resource::<ContactGraph>()
+            .init_resource::<JointGraph>();
 
         app.configure_sets(
             PhysicsSchedule,
