@@ -264,16 +264,15 @@ fn debug_render_bvh(
         return;
     };
 
-    for node in bvh.dynamic_tree.bvh.nodes.iter() {
-        if node.prim_count == 0 && node.aabb.valid() {
-            gizmos.aabb_3d(
-                Aabb3d::from_min_max(node.aabb.min, node.aabb.max),
-                Transform::IDENTITY,
-                collider_tree_color,
-            );
-        }
-    }
-    for node in bvh.static_tree.bvh.nodes.iter() {
+    for node in bvh
+        .dynamic_tree
+        .bvh
+        .nodes
+        .iter()
+        .chain(bvh.kinematic_tree.bvh.nodes.iter())
+        .chain(bvh.static_tree.bvh.nodes.iter())
+        .chain(bvh.standalone_tree.bvh.nodes.iter())
+    {
         if node.prim_count == 0 && node.aabb.valid() {
             gizmos.aabb_3d(
                 Aabb3d::from_min_max(node.aabb.min, node.aabb.max),

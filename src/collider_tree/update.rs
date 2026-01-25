@@ -178,13 +178,8 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         app.add_observer(add_to_tree_on::<Remove, ColliderDisabled, Without<Disabled>>);
 
         // Case 5
-        app.add_observer(
-            remove_from_tree_on::<
-                Add,
-                (Disabled, ColliderDisabled),
-                (Without<Disabled>, Without<ColliderDisabled>),
-            >,
-        );
+        app.add_observer(remove_from_tree_on::<Add, Disabled, Without<ColliderDisabled>>);
+        app.add_observer(remove_from_tree_on::<Add, ColliderDisabled, Without<Disabled>>);
 
         // Case 6
         app.add_observer(
@@ -572,17 +567,20 @@ impl EnlargedProxies {
 // TODO: Optimize the change detection.
 fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
     mut colliders: ParamSet<(
-        Query<(
-            Ref<C>,
-            &mut ColliderAabb,
-            &mut EnlargedAabb,
-            &ColliderTreeProxyKey,
-            Ref<Position>,
-            Ref<Rotation>,
-            Option<&CollisionMargin>,
-            Option<&SpeculativeMargin>,
-        )>,
-        Query<(&ColliderAabb, &EnlargedAabb)>,
+        Query<
+            (
+                Ref<C>,
+                &mut ColliderAabb,
+                &mut EnlargedAabb,
+                &ColliderTreeProxyKey,
+                Ref<Position>,
+                Ref<Rotation>,
+                Option<&CollisionMargin>,
+                Option<&SpeculativeMargin>,
+            ),
+            Without<ColliderDisabled>,
+        >,
+        Query<(&ColliderAabb, &EnlargedAabb), Without<ColliderDisabled>>,
     )>,
     rb_query: Query<
         (
@@ -822,7 +820,10 @@ fn update_static_aabbs<C: AnyCollider>(
             Option<&CollisionMargin>,
             &ColliderTreeProxyKey,
         ),
-        Or<(Changed<Position>, Changed<Rotation>, Changed<C>)>,
+        (
+            Without<ColliderDisabled>,
+            Or<(Changed<Position>, Changed<Rotation>, Changed<C>)>,
+        ),
     >,
     narrow_phase_config: Res<NarrowPhaseConfig>,
     length_unit: Res<PhysicsLengthUnit>,
@@ -839,7 +840,6 @@ fn update_static_aabbs<C: AnyCollider>(
         .bvh
         .init_primitives_to_nodes_if_uninit();
 
-    // TODO: Handle disabled bodies and colliders?
     // TODO: Parallelize this and/or avoid iterating over all static bodies.
     for body_colliders in &static_bodies {
         let mut iter = colliders.iter_many_mut(body_colliders.iter());
@@ -886,6 +886,7 @@ fn update_standalone_aabbs<C: AnyCollider>(
         ),
         (
             Without<ColliderOf>,
+            Without<ColliderDisabled>,
             Or<(Changed<Position>, Changed<Rotation>, Changed<C>)>,
         ),
     >,
