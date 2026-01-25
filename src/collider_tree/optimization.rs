@@ -164,6 +164,7 @@ fn optimize_trees(
 
     let task_pool = AsyncComputeTaskPool::get();
 
+    // TODO: Do this for all trees.
     // Use the dynamic tree's workspace for the optimization.
     core::mem::swap(
         &mut collider_trees.dynamic_tree.workspace,
@@ -209,7 +210,7 @@ fn optimize_trees(
             tree.rebuild_full();
         }),
 
-        TreeOptimizationMode::Adaptive { .. } => unreachable!(""),
+        TreeOptimizationMode::Adaptive { .. } => unreachable!(),
     };
 
     optimization.task = Some(task);
