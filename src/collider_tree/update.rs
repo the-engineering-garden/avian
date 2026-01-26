@@ -22,7 +22,6 @@ use bevy::{
     prelude::*,
 };
 use obvhs::aabb::Aabb;
-#[cfg(feature = "parallel")]
 use thread_local::ThreadLocal;
 
 /// A plugin for updating [`ColliderTree`]s for a collider type `C`.

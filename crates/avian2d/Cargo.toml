@@ -28,12 +28,7 @@ f64 = []
 
 debug-plugin = ["bevy/bevy_gizmos", "bevy/bevy_render"]
 simd = ["parry2d?/simd-stable", "parry2d-f64?/simd-stable"]
-parallel = [
-    "dep:thread_local",
-    "bevy/multi_threaded",
-    "parry2d?/parallel",
-    "parry2d-f64?/parallel",
-]
+parallel = ["bevy/multi_threaded", "parry2d?/parallel", "parry2d-f64?/parallel"]
 enhanced-determinism = [
     "dep:libm",
     "bevy_math/libm",
@@ -103,7 +98,7 @@ arrayvec = "0.7"
 smallvec = "1.15"
 itertools = "0.13"
 bitflags = "2.5.0"
-thread_local = { version = "1.1", optional = true }
+thread_local = { version = "1.1" }
 disqualified = { version = "1.0" }
 
 [dev-dependencies]
