@@ -5,7 +5,7 @@
 //! a [Bounding Volume Hierarchy (BVH)][BVH], which accelerates querying for [AABB](crate::collision::collider::ColliderAabb)
 //! overlaps, ray intersections, and more.
 //!
-//! Colliders of dynamic, kinematic, and static bodies are all stored in a separate [`ColliderTree`](ColliderTree)
+//! Colliders of dynamic, kinematic, and static bodies are all stored in a separate [`ColliderTree`]
 //! to allow efficiently querying for specific subsets of colliders and to optimize tree updates based on body type.
 //! Trees for dynamic and kinematic bodies are rebuilt every physics step, while the static tree is incrementally updated
 //! when static colliders are added, removed, or modified. The trees are stored in the [`ColliderTrees`] resource.
@@ -19,7 +19,7 @@
 //! and for broad phase collision detection, consider using the [`BvhBroadPhasePlugin`].
 //!
 //! [`SpatialQuery`]: crate::spatial_query::SpatialQuery
-//! [`BvhBroadPhasePlugin`]: crate::collision::broad_phase::bvh::BvhBroadPhasePlugin
+//! [`BvhBroadPhasePlugin`]: crate::collision::broad_phase::BvhBroadPhasePlugin
 
 mod diagnostics;
 mod optimization;

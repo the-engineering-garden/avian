@@ -1,4 +1,3 @@
-#[cfg(feature = "parallel")]
 use core::cell::RefCell;
 use core::marker::PhantomData;
 
