@@ -1,6 +1,6 @@
 use bevy::{
     ecs::{entity::Entity, resource::Resource},
-    reflect::Reflect,
+    reflect::prelude::*,
 };
 use obvhs::{
     INVALID,

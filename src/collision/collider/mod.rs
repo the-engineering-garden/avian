@@ -556,7 +556,7 @@ impl From<ColliderAabb> for obvhs::aabb::Aabb {
             #[cfg(feature = "3d")]
             min: value.min.f32().into(),
             #[cfg(feature = "3d")]
-            max: value.max.into(),
+            max: value.max.f32().into(),
             #[cfg(feature = "2d")]
             min: value.min.f32().extend(0.0).into(),
             #[cfg(feature = "2d")]
