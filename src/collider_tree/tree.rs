@@ -65,21 +65,41 @@ bitflags::bitflags! {
     impl ColliderTreeProxyFlags: u32 {
         /// Set if the collider is a sensor.
         const SENSOR = 1 << 0;
-        /// Set if custom filtering is enabled via the `filter_pairs` hook.
-        const CUSTOM_FILTER = 1 << 1;
+        /// Set if the body this collider is attached to has [`RigidBodyDisabled`](crate::dynamics::rigid_body::RigidBodyDisabled).
+        const BODY_DISABLED = 1 << 1;
+        /// Set if the custom filtering hook is active for this collider.
+        const CUSTOM_FILTER = 1 << 2;
+        /// Set if the contact modification hook is active for this collider.
+        const MODIFY_CONTACTS = 1 << 3;
+        /// Set if contact events are enabled for this collider.
+        const CONTACT_EVENTS = 1 << 4;
     }
 }
 
 impl ColliderTreeProxyFlags {
     /// Creates [`ColliderTreeProxyFlags`] from the given sensor status and active collision hooks.
     #[inline]
-    pub fn new(is_sensor: bool, active_hooks: ActiveCollisionHooks) -> Self {
+    pub fn new(
+        is_sensor: bool,
+        is_body_disabled: bool,
+        events_enabled: bool,
+        active_hooks: ActiveCollisionHooks,
+    ) -> Self {
         let mut flags = ColliderTreeProxyFlags::empty();
         if is_sensor {
             flags |= ColliderTreeProxyFlags::SENSOR;
         }
+        if is_body_disabled {
+            flags |= ColliderTreeProxyFlags::BODY_DISABLED;
+        }
         if active_hooks.contains(ActiveCollisionHooks::FILTER_PAIRS) {
             flags |= ColliderTreeProxyFlags::CUSTOM_FILTER;
+        }
+        if active_hooks.contains(ActiveCollisionHooks::MODIFY_CONTACTS) {
+            flags |= ColliderTreeProxyFlags::MODIFY_CONTACTS;
+        }
+        if events_enabled {
+            flags |= ColliderTreeProxyFlags::CONTACT_EVENTS;
         }
         flags
     }
@@ -92,10 +112,16 @@ impl ColliderTreeProxy {
         self.flags.contains(ColliderTreeProxyFlags::SENSOR)
     }
 
-    /// Returns `true` if custom filtering is enabled via the `filter_pairs` hook.
+    /// Returns `true` if the custom filtering hook is active.
     #[inline]
     pub fn has_custom_filter(&self) -> bool {
         self.flags.contains(ColliderTreeProxyFlags::CUSTOM_FILTER)
+    }
+
+    /// Returns `true` if the contact modification hook is active.
+    #[inline]
+    pub fn has_contact_modification(&self) -> bool {
+        self.flags.contains(ColliderTreeProxyFlags::MODIFY_CONTACTS)
     }
 }
 

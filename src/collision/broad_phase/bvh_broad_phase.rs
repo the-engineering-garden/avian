@@ -5,7 +5,7 @@ use crate::{
         ColliderTree, ColliderTreeProxy, ColliderTreeProxyFlags, ColliderTreeProxyKey,
         ColliderTreeType, ColliderTrees, MovedProxies, ProxyId,
     },
-    collision::CollisionDiagnostics,
+    collision::{CollisionDiagnostics, contact_types::ContactEdgeFlags},
     data_structures::pair_key::PairKey,
     dynamics::solver::joint_graph::JointGraph,
     prelude::*,
@@ -50,7 +50,6 @@ where
 fn collect_collision_pairs<H: CollisionHooks>(
     trees: ResMut<ColliderTrees>,
     moved_proxies: Res<MovedProxies>,
-    collider_of_query: Query<&ColliderOf>,
     hooks: StaticSystemParam<H>,
     par_commands: ParallelCommands,
     mut contact_graph: ResMut<ContactGraph>,
@@ -62,9 +61,12 @@ fn collect_collision_pairs<H: CollisionHooks>(
     let start = crate::utils::Instant::now();
 
     let hooks = hooks.into_inner();
-    let mut broad_collision_pairs = Vec::new();
+    let mut broad_collision_pairs = Vec::<(ColliderTreeProxyKey, ColliderTreeProxyKey)>::new();
 
     // Perform tree queries for all moving proxies.
+    // TODO. We could iterate moved proxies of each tree separately
+    //       to get rid of tree lookups and body type checks.
+    //       May not be worth it though?
     let pairs = moved_proxies.proxies().par_splat_map(
         ComputeTaskPool::get(),
         None,
@@ -158,26 +160,37 @@ fn collect_collision_pairs<H: CollisionHooks>(
         broad_collision_pairs.append(&mut chunk);
     }
 
-    // TODO: Set flags for events and hooks etc.
-    for (entity1, entity2) in broad_collision_pairs {
-        let mut contact_edge = ContactEdge::new(entity1, entity2);
+    // Add the found collision pairs to the contact graph.
+    for (proxy_key1, proxy_key2) in broad_collision_pairs {
+        let proxy1 = trees.get_proxy(proxy_key1).unwrap();
+        let proxy2 = trees.get_proxy(proxy_key2).unwrap();
 
-        if let (Ok(collider_of1), Ok(collider_of2)) = (
-            collider_of_query.get(entity1),
-            collider_of_query.get(entity2),
-        ) {
-            contact_edge.body1 = Some(collider_of1.body);
-            contact_edge.body2 = Some(collider_of2.body);
-        }
+        let mut contact_edge = ContactEdge::new(proxy1.collider, proxy2.collider);
+        contact_edge.body1 = proxy1.body;
+        contact_edge.body2 = proxy2.body;
+
+        let flags_union = proxy1.flags.union(proxy2.flags);
+
+        // Contact event flags
+        contact_edge.flags.set(
+            ContactEdgeFlags::CONTACT_EVENTS,
+            flags_union.contains(ColliderTreeProxyFlags::CONTACT_EVENTS),
+        );
 
         contact_graph.add_edge_with(contact_edge, |contact_pair| {
-            if let (Ok(collider_of1), Ok(collider_of2)) = (
-                collider_of_query.get(entity1),
-                collider_of_query.get(entity2),
-            ) {
-                contact_pair.body1 = Some(collider_of1.body);
-                contact_pair.body2 = Some(collider_of2.body);
-            }
+            contact_pair.body1 = proxy1.body;
+            contact_pair.body2 = proxy2.body;
+
+            contact_pair.flags.set(
+                ContactPairFlags::MODIFY_CONTACTS,
+                flags_union.contains(ColliderTreeProxyFlags::MODIFY_CONTACTS),
+            );
+
+            contact_pair.flags.set(
+                ContactPairFlags::GENERATE_CONSTRAINTS,
+                !flags_union.contains(ColliderTreeProxyFlags::BODY_DISABLED)
+                    && !flags_union.contains(ColliderTreeProxyFlags::SENSOR),
+            );
         });
     }
 
@@ -197,7 +210,7 @@ fn query_tree(
     commands: &mut Commands,
     contact_graph: &ContactGraph,
     joint_graph: &JointGraph,
-    pairs: &mut Vec<(Entity, Entity)>,
+    pairs: &mut Vec<(ColliderTreeProxyKey, ColliderTreeProxyKey)>,
 ) {
     tree.bvh.aabb_traverse(proxy1.aabb, |bvh, node_index| {
         let node = bvh.nodes[node_index as usize];
@@ -271,7 +284,7 @@ fn query_tree(
                 }
             }
 
-            pairs.push((entity1, entity2));
+            pairs.push((proxy_key1, proxy_key2));
         }
 
         true

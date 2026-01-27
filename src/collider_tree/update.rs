@@ -109,6 +109,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         // 8. On remove `Sensor`, unset sensor proxy flag.
         // 9. On replace `CollisionLayers`, update proxy layers.
         // 10. On replace `ActiveCollisionHooks`, set proxy flag.
+        // 11. On replace `RigidBodyDisabled`, set/unset proxy flag.
 
         // Case 1
         app.add_observer(add_to_tree_on::<Insert, (C, ColliderOf), Without<ColliderDisabled>>);
@@ -130,6 +131,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                     &EnlargedAabb,
                     Option<&CollisionLayers>,
                     Has<Sensor>,
+                    Has<CollisionEventsEnabled>,
                     Option<&ActiveCollisionHooks>,
                 ),
                 (With<C>, Without<ColliderDisabled>),
@@ -138,8 +140,15 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
              mut moved_proxies: ResMut<MovedProxies>| {
                 let entity = trigger.entity;
 
-                let Ok((proxy_key, collider_aabb, enlarged_aabb, layers, is_sensor, active_hooks)) =
-                    collider_query.get_mut(entity)
+                let Ok((
+                    proxy_key,
+                    collider_aabb,
+                    enlarged_aabb,
+                    layers,
+                    is_sensor,
+                    has_contact_events,
+                    active_hooks,
+                )) = collider_query.get_mut(entity)
                 else {
                     return;
                 };
@@ -162,6 +171,8 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                     aabb,
                     flags: ColliderTreeProxyFlags::new(
                         is_sensor,
+                        false,
+                        has_contact_events,
                         active_hooks.copied().unwrap_or_default(),
                     ),
                 };
@@ -192,7 +203,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         // Case 6
         app.add_observer(
             |trigger: On<Insert, RigidBody>,
-             body_query: Query<(&RigidBody, &RigidBodyColliders)>,
+             body_query: Query<(&RigidBody, &RigidBodyColliders, Has<RigidBodyDisabled>)>,
              mut collider_query: Query<
                 (
                     &ColliderAabb,
@@ -200,6 +211,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                     &mut ColliderTreeProxyKey,
                     Option<&CollisionLayers>,
                     Has<Sensor>,
+                    Has<CollisionEventsEnabled>,
                     Option<&ActiveCollisionHooks>,
                 ),
                 Without<ColliderDisabled>,
@@ -208,7 +220,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
              mut moved_proxies: ResMut<MovedProxies>| {
                 let entity = trigger.entity;
 
-                let Ok((new_rb, body_colliders)) = body_query.get(entity) else {
+                let Ok((new_rb, body_colliders, is_body_disabled)) = body_query.get(entity) else {
                     return;
                 };
 
@@ -219,6 +231,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                         mut proxy_key,
                         layers,
                         is_sensor,
+                        has_contact_events,
                         active_hooks,
                     )) = collider_query.get_mut(collider_entity)
                     else {
@@ -248,6 +261,8 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                         aabb,
                         flags: ColliderTreeProxyFlags::new(
                             is_sensor,
+                            is_body_disabled,
+                            has_contact_events,
                             active_hooks.copied().unwrap_or_default(),
                         ),
                     };
@@ -354,13 +369,42 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
                 }
             },
         );
+
+        // Case 11
+        app.add_observer(
+            |trigger: On<Replace, RigidBodyDisabled>,
+             body_query: Query<(&RigidBodyColliders, Has<RigidBodyDisabled>)>,
+             mut collider_query: Query<&ColliderTreeProxyKey, Without<ColliderDisabled>>,
+             mut trees: ResMut<ColliderTrees>| {
+                let entity = trigger.entity;
+
+                let Ok((body_colliders, is_body_disabled)) = body_query.get(entity) else {
+                    return;
+                };
+
+                for collider_entity in body_colliders.iter() {
+                    let Ok(proxy_key) = collider_query.get_mut(collider_entity) else {
+                        continue;
+                    };
+
+                    let tree = trees.tree_for_type_mut(proxy_key.tree_type());
+
+                    // Update body disabled flag.
+                    if let Some(proxy) = tree.get_proxy_mut(proxy_key.id()) {
+                        proxy
+                            .flags
+                            .set(ColliderTreeProxyFlags::BODY_DISABLED, is_body_disabled);
+                    }
+                }
+            },
+        );
     }
 }
 
 /// Adds a collider to the appropriate collider tree when the event `E` is triggered.
 fn add_to_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
     trigger: On<E, B>,
-    body_query: Query<&RigidBody, Allow<Disabled>>,
+    body_query: Query<(&RigidBody, Has<RigidBodyDisabled>), Allow<Disabled>>,
     mut collider_query: Query<
         (
             Option<&ColliderOf>,
@@ -369,6 +413,7 @@ fn add_to_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
             &mut ColliderTreeProxyKey,
             Option<&CollisionLayers>,
             Has<Sensor>,
+            Has<CollisionEventsEnabled>,
             Option<&ActiveCollisionHooks>,
         ),
         F,
@@ -385,17 +430,19 @@ fn add_to_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
         mut proxy_key,
         layers,
         is_sensor,
+        has_contact_events,
         active_hooks,
     )) = collider_query.get_mut(entity)
     else {
         return;
     };
 
-    let tree_type = if let Some(Ok(rb)) = collider_of.map(|c| body_query.get(c.body)) {
-        ColliderTreeType::from_body(Some(*rb))
-    } else {
-        ColliderTreeType::Standalone
-    };
+    let (tree_type, is_body_disabled) =
+        if let Some(Ok((rb, disabled))) = collider_of.map(|c| body_query.get(c.body)) {
+            (ColliderTreeType::from_body(Some(*rb)), disabled)
+        } else {
+            (ColliderTreeType::Standalone, false)
+        };
 
     let aabb = Aabb::from(*collider_aabb);
     let enlarged_aabb = Aabb::from(enlarged_aabb.get());
@@ -405,7 +452,12 @@ fn add_to_tree_on<E: EntityEvent, B: Bundle, F: QueryFilter>(
         body: collider_of.map(|c| c.body),
         layers: layers.copied().unwrap_or_default(),
         aabb,
-        flags: ColliderTreeProxyFlags::new(is_sensor, active_hooks.copied().unwrap_or_default()),
+        flags: ColliderTreeProxyFlags::new(
+            is_sensor,
+            is_body_disabled,
+            has_contact_events,
+            active_hooks.copied().unwrap_or_default(),
+        ),
     };
 
     // Remove the old proxy if it exists.

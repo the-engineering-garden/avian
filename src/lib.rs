@@ -835,8 +835,7 @@ where
         let builder = self
             .plugins
             .build()
-            .disable::<BroadPhaseCorePlugin>()
-            .add(BroadPhaseCorePlugin)
+            .disable::<BvhBroadPhasePlugin>()
             .add(BvhBroadPhasePlugin::<H>::default());
 
         #[cfg(all(

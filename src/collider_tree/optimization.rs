@@ -165,7 +165,7 @@ fn optimize_trees(
 
     let task_pool = AsyncComputeTaskPool::get();
 
-    // TODO: Do this for all trees.
+    // TODO: Do this for at least the kinematic tree as well.
     // Use the dynamic tree's workspace for the optimization.
     core::mem::swap(
         &mut collider_trees.dynamic_tree.workspace,
