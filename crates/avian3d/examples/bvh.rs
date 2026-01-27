@@ -86,7 +86,7 @@ fn main() {
     app.run();
 }
 
-const PARTICLE_RADIUS: Scalar = 7.0;
+const PARTICLE_RADIUS: f32 = 7.0;
 
 /// Settings for the BVH example.
 #[derive(Resource)]
@@ -168,7 +168,8 @@ fn move_random(mut query: Query<&mut Position>, settings: Res<BvhExampleSettings
                         ..PARTICLE_RADIUS * settings.delta_fraction,
                 ),
                 0.0,
-            );
+            )
+            .adjust_precision();
         }
     }
 }
