@@ -277,28 +277,9 @@ impl ColliderTree {
     /// Fully rebuilds the tree from the given list of AABBs.
     #[inline]
     pub fn rebuild_full(&mut self) {
-        if self.bvh.nodes.is_empty() {
-            return;
-        }
-
-        self.bvh.init_primitives_to_nodes_if_uninit();
-
-        let mut aabbs: Vec<Aabb> = Vec::with_capacity(self.bvh.primitives_to_nodes.len());
-        let mut indices: Vec<u32> = Vec::with_capacity(self.bvh.primitives_to_nodes.len());
-
-        for (i, &node_index) in self.bvh.primitives_to_nodes.iter().enumerate() {
-            if node_index == INVALID {
-                continue;
-            }
-            aabbs.push(self.bvh.nodes[node_index as usize].aabb);
-            indices.push(i as u32);
-        }
-
-        self.workspace.ploc_builder.build_with_bvh(
+        self.workspace.ploc_builder.full_rebuild(
             &mut self.bvh,
             PlocSearchDistance::Minimum,
-            &aabbs,
-            indices,
             SortPrecision::U64,
             0,
         );
