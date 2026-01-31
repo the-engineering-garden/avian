@@ -58,14 +58,14 @@ pub struct ColliderTreeOptimization {
 /// The optimization mode for a dynamic [`ColliderTree`].
 #[derive(Clone, Copy, Debug, PartialEq, Reflect)]
 pub enum TreeOptimizationMode {
-    /// The tree is optimized by reinserting [moved proxies](`MovedProxies`).
+    /// The tree is optimized by reinserting proxies whose AABB in the tree has changed.
     ///
     /// This is the fastest method when only a small portion of proxies have moved,
     /// but is less effective for large numbers of moved proxies.
     Reinsert,
 
     /// The tree is optimized by performing a partial rebuild that only rebuilds
-    /// parts of the tree affected by [moved proxies](`MovedProxies`).
+    /// parts of the tree affected by proxies that have moved.
     ///
     /// This method is more effective than reinsertion when a moderate number of proxies
     /// have moved. However, if a large portion of proxies have moved, a full rebuild
