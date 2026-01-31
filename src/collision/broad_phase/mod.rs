@@ -146,6 +146,11 @@
 //!         .add(BruteForceBroadPhasePlugin)
 //! );
 //! # }
+//! #
+//! # struct BruteForceBroadPhasePlugin;
+//! # impl Plugin for BruteForceBroadPhasePlugin {
+//! #     fn build(&self, app: &mut App) {}
+//! # }
 //! ```
 
 mod bvh_broad_phase;
