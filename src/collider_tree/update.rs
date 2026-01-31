@@ -47,7 +47,7 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         app.add_systems(
             PhysicsSchedule,
             (
-                update_dynamic_kinematic_aabbs::<C>,
+                update_dynamic_kinematic_aabbs::<C, Or<(With<SolverBody>, With<Sleeping>)>>,
                 update_static_aabbs::<C>,
                 update_standalone_aabbs::<C>,
             )
@@ -61,7 +61,10 @@ impl<C: AnyCollider> Plugin for ColliderTreeUpdatePlugin<C> {
         // Clear moved proxies and update dynamic and kinematic collider AABBs.
         app.add_systems(
             PhysicsSchedule,
-            (clear_moved_proxies, update_dynamic_kinematic_aabbs::<C>)
+            (
+                clear_moved_proxies,
+                update_dynamic_kinematic_aabbs::<C, With<SolverBody>>,
+            )
                 .chain()
                 .after(PhysicsStepSystems::Finalize)
                 .before(PhysicsStepSystems::Last),
@@ -635,7 +638,7 @@ impl EnlargedProxies {
 
 /// Updates the AABBs of colliders attached to dynamic or kinematic rigid bodies.
 // TODO: Optimize the change detection.
-fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
+fn update_dynamic_kinematic_aabbs<C: AnyCollider, BodyFilter: QueryFilter>(
     mut colliders: ParamSet<(
         Query<
             (
@@ -661,7 +664,7 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
             &RigidBodyColliders,
             Has<SweptCcd>,
         ),
-        With<SolverBody>,
+        BodyFilter,
     >,
     narrow_phase_config: Res<NarrowPhaseConfig>,
     length_unit: Res<PhysicsLengthUnit>,
