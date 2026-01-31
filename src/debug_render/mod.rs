@@ -264,15 +264,7 @@ fn debug_render_bvh(
         return;
     };
 
-    for node in bvh
-        .dynamic_tree
-        .bvh
-        .nodes
-        .iter()
-        .chain(bvh.kinematic_tree.bvh.nodes.iter())
-        .chain(bvh.static_tree.bvh.nodes.iter())
-        .chain(bvh.standalone_tree.bvh.nodes.iter())
-    {
+    for node in bvh.iter_trees().flat_map(|tree| tree.bvh.nodes.iter()) {
         if node.prim_count == 0 && node.aabb.valid() {
             gizmos.aabb_3d(
                 Aabb3d::from_min_max(node.aabb.min, node.aabb.max),

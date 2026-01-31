@@ -1,7 +1,8 @@
 use crate::{
     collider_tree::{
-        ColliderTree, ColliderTreeDiagnostics, ColliderTreeSystems, ColliderTrees, MovedProxies,
+        ColliderTree, ColliderTreeDiagnostics, ColliderTreeSystems, ColliderTreeType, ColliderTrees,
     },
+    data_structures::stable_vec::StableVec,
     prelude::*,
 };
 use bevy::{
@@ -16,16 +17,14 @@ pub(super) struct ColliderTreeOptimizationPlugin;
 impl Plugin for ColliderTreeOptimizationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ColliderTreeOptimization>()
-            .init_resource::<OptimizationTask>();
+            .init_resource::<OptimizationTasks>();
 
         app.add_systems(
             PhysicsSchedule,
-            optimize_trees.in_set(ColliderTreeSystems::BeginOptimize),
-        );
-
-        app.add_systems(
-            PhysicsSchedule,
-            block_on_optimize_trees.in_set(ColliderTreeSystems::EndOptimize),
+            (
+                optimize_trees.in_set(ColliderTreeSystems::BeginOptimize),
+                block_on_optimize_trees.in_set(ColliderTreeSystems::EndOptimize),
+            ),
         );
     }
 }
@@ -137,84 +136,82 @@ impl TreeOptimizationMode {
     }
 }
 
-/// A resource tracking the ongoing optimization task for the dynamic [`ColliderTree`].
-#[derive(Resource, Default)]
-struct OptimizationTask {
-    /// The collider tree being optimized.
-    ///
-    /// This is taken from the dynamic tree before optimization begins,
-    /// and the optimized BVH is written back to the dynamic tree
-    /// when the optimization is complete.
-    tree: ColliderTree,
+/// A resource tracking ongoing optimization tasks for [`ColliderTree`]s.
+#[derive(Resource, Default, Deref, DerefMut)]
+struct OptimizationTasks(Vec<Task<CommandQueue>>);
 
-    /// The async task performing the rebuild.
-    task: Option<Task<CommandQueue>>,
-}
-
-/// Begins optimizing the dynamic [`ColliderTree`] to maintain good query performance.
+/// Begins optimizing the dynamic and kinematic [`ColliderTree`]s to maintain good query performance.
 ///
 /// This spawns an async task that runs concurrently with the simulation step.
 fn optimize_trees(
     mut collider_trees: ResMut<ColliderTrees>,
-    mut optimization: ResMut<OptimizationTask>,
+    mut optimization_tasks: ResMut<OptimizationTasks>,
     optimization_settings: Res<ColliderTreeOptimization>,
-    moved_proxies: ResMut<MovedProxies>,
     mut diagnostics: ResMut<ColliderTreeDiagnostics>,
 ) {
     let start = crate::utils::Instant::now();
 
     let task_pool = AsyncComputeTaskPool::get();
 
-    // TODO: Do this for at least the kinematic tree as well.
-    // Use the dynamic tree's workspace for the optimization.
-    core::mem::swap(
-        &mut collider_trees.dynamic_tree.workspace,
-        &mut optimization.tree.workspace,
-    );
+    // Spawn optimization tasks for dynamic and kinematic trees.
+    // For now, we do not optimize static or standalone trees,
+    // as their colliders are not expected to move much.
+    for tree_type in [ColliderTreeType::Dynamic, ColliderTreeType::Kinematic] {
+        let tree = collider_trees.tree_for_type_mut(tree_type);
 
-    let moved_ratio =
-        moved_proxies.proxies().len() as f32 / collider_trees.dynamic_tree.proxies.len() as f32;
+        let moved_ratio = tree.moved_proxies.len() as f32 / tree.proxies.len() as f32;
 
-    let mut tree = core::mem::take(&mut optimization.tree);
+        // Take or clone the BVH for the optimization task.
+        let bvh = if optimization_settings.optimize_in_place {
+            core::mem::take(&mut tree.bvh)
+        } else {
+            // TODO: Can we avoid cloning the entire BVH?
+            tree.bvh.clone()
+        };
 
-    if optimization_settings.optimize_in_place {
-        core::mem::swap(&mut tree.bvh, &mut collider_trees.dynamic_tree.bvh);
-    } else {
-        // TODO: Can we avoid cloning the entire BVH?
-        tree.bvh.clone_from(&collider_trees.dynamic_tree.bvh);
+        // Create a new tree for the optimization task.
+        let new_tree = ColliderTree {
+            bvh,
+            proxies: StableVec::new(),
+            // These are not needed during the simulation step.
+            moved_proxies: core::mem::take(&mut tree.moved_proxies),
+            workspace: core::mem::take(&mut tree.workspace),
+        };
+
+        let task = match optimization_settings.optimization_mode.resolve(moved_ratio) {
+            TreeOptimizationMode::Reinsert => {
+                let moved_leaves = new_tree
+                    .moved_proxies
+                    .iter()
+                    .map(|key| new_tree.bvh.primitives_to_nodes[key.index()])
+                    .collect::<Vec<u32>>();
+
+                spawn_optimization_task(task_pool, new_tree, tree_type, move |tree| {
+                    tree.optimize_candidates(&moved_leaves, 1);
+                })
+            }
+            TreeOptimizationMode::PartialRebuild => {
+                let moved_leaves = new_tree
+                    .moved_proxies
+                    .iter()
+                    .map(|key| new_tree.bvh.primitives_to_nodes[key.index()])
+                    .collect::<Vec<u32>>();
+
+                spawn_optimization_task(task_pool, new_tree, tree_type, move |tree| {
+                    tree.rebuild_partial(&moved_leaves);
+                })
+            }
+            TreeOptimizationMode::FullRebuild => {
+                spawn_optimization_task(task_pool, new_tree, tree_type, move |tree| {
+                    tree.rebuild_full();
+                })
+            }
+
+            TreeOptimizationMode::Adaptive { .. } => unreachable!(),
+        };
+
+        optimization_tasks.push(task);
     }
-
-    let task = match optimization_settings.optimization_mode.resolve(moved_ratio) {
-        TreeOptimizationMode::Reinsert => {
-            let moved_leaves = moved_proxies
-                .proxies()
-                .iter()
-                .map(|key| tree.bvh.primitives_to_nodes[key.id().index()])
-                .collect::<Vec<u32>>();
-
-            spawn_optimization_task(task_pool, tree, move |tree| {
-                tree.optimize_candidates(&moved_leaves, 1);
-            })
-        }
-        TreeOptimizationMode::PartialRebuild => {
-            let moved_leaves = moved_proxies
-                .proxies()
-                .iter()
-                .map(|key| tree.bvh.primitives_to_nodes[key.id().index()])
-                .collect::<Vec<u32>>();
-
-            spawn_optimization_task(task_pool, tree, move |tree| {
-                tree.rebuild_partial(&moved_leaves);
-            })
-        }
-        TreeOptimizationMode::FullRebuild => spawn_optimization_task(task_pool, tree, |tree| {
-            tree.rebuild_full();
-        }),
-
-        TreeOptimizationMode::Adaptive { .. } => unreachable!(),
-    };
-
-    optimization.task = Some(task);
 
     diagnostics.optimize += start.elapsed();
 }
@@ -224,6 +221,7 @@ fn optimize_trees(
 fn spawn_optimization_task(
     task_pool: &AsyncComputeTaskPool,
     mut tree: ColliderTree,
+    tree_type: ColliderTreeType,
     optimize: impl FnOnce(&mut ColliderTree) + Send + 'static,
 ) -> Task<CommandQueue> {
     task_pool.spawn(async move {
@@ -234,33 +232,27 @@ fn spawn_optimization_task(
             let mut collider_trees = world
                 .get_resource_mut::<ColliderTrees>()
                 .expect("ColliderTrees resource missing");
-            collider_trees.dynamic_tree.bvh = tree.bvh;
+            let collider_tree = collider_trees.tree_for_type_mut(tree_type);
+            collider_tree.bvh = tree.bvh;
+            collider_tree.workspace = tree.workspace;
         });
         command_queue
     })
 }
 
-/// Completes the optimization of the dynamic [`ColliderTree`] started in [`optimize_trees`].
+/// Completes the [`ColliderTree`] optimization tasks started in [`optimize_trees`].
 fn block_on_optimize_trees(
     mut commands: Commands,
-    mut collider_trees: ResMut<ColliderTrees>,
-    mut optimization: ResMut<OptimizationTask>,
+    mut optimization: ResMut<OptimizationTasks>,
     mut diagnostics: ResMut<ColliderTreeDiagnostics>,
 ) {
     let start = crate::utils::Instant::now();
 
-    if let Some(task) = &mut optimization.task {
+    // Complete all ongoing optimization tasks.
+    optimization.drain(..).for_each(|task| {
         let mut command_queue = block_on(task);
         commands.append(&mut command_queue);
-    }
-
-    optimization.task = None;
-
-    // Restore the dynamic tree's workspace.
-    core::mem::swap(
-        &mut collider_trees.dynamic_tree.workspace,
-        &mut optimization.tree.workspace,
-    );
+    });
 
     diagnostics.optimize += start.elapsed();
 }

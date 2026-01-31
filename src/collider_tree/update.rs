@@ -541,11 +541,14 @@ impl MovedProxies {
 
     /// Inserts a moved proxy key.
     ///
-    /// If the proxy key is already present, it is not added again.
+    /// Returns `true` if the proxy key was not already present.
     #[inline]
-    pub fn insert(&mut self, proxy_key: ColliderTreeProxyKey) {
+    pub fn insert(&mut self, proxy_key: ColliderTreeProxyKey) -> bool {
         if self.set.insert(proxy_key) {
             self.proxies.push(proxy_key);
+            true
+        } else {
+            false
         }
     }
 
@@ -687,11 +690,6 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
     let default_speculative_margin = length_unit.0 * narrow_phase_config.default_speculative_margin;
     let contact_tolerance = length_unit.0 * narrow_phase_config.contact_tolerance;
     let margin = length_unit.0 * 0.05;
-
-    collider_trees
-        .dynamic_tree
-        .bvh
-        .init_primitives_to_nodes_if_uninit();
 
     let collider_query = colliders.p0();
 
@@ -851,8 +849,9 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
 
                 // Record the moved proxy.
                 let proxy_key = ColliderTreeProxyKey::new(proxy_id, tree_type);
-                tree.moved_proxies.push(proxy_id);
-                moved_proxies.insert(proxy_key);
+                if moved_proxies.insert(proxy_key) {
+                    tree.moved_proxies.push(proxy_id);
+                }
 
                 // Clear the least significant set bit
                 bits &= bits - 1;
@@ -862,7 +861,7 @@ fn update_dynamic_kinematic_aabbs<C: AnyCollider>(
         // Refit the BVH after enlarging proxies.
         // TODO: For a smaller number of moved proxies, it can be faster
         //       to only refit upwards from the moved leaves.
-        tree.bvh.refit_all();
+        tree.refit_all();
     }
 
     // Update the last update tick.

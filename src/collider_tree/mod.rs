@@ -118,7 +118,7 @@ pub struct ColliderTrees {
     pub dynamic_tree: ColliderTree,
     /// A tree for the colliders of kinematic bodies.
     pub kinematic_tree: ColliderTree,
-    /// A tree for the colliders of static bodies and colliders with no body.
+    /// A tree for the colliders of static bodies.
     pub static_tree: ColliderTree,
     /// A tree for standalone colliders with no associated rigid body.
     pub standalone_tree: ColliderTree,
@@ -145,6 +145,30 @@ impl ColliderTrees {
             ColliderTreeType::Static => &mut self.static_tree,
             ColliderTreeType::Standalone => &mut self.standalone_tree,
         }
+    }
+
+    /// Returns an iterator over all collider trees.
+    #[inline]
+    pub fn iter_trees(&self) -> impl Iterator<Item = &ColliderTree> {
+        [
+            &self.dynamic_tree,
+            &self.kinematic_tree,
+            &self.static_tree,
+            &self.standalone_tree,
+        ]
+        .into_iter()
+    }
+
+    /// Returns a mutable iterator over all collider trees.
+    #[inline]
+    pub fn iter_trees_mut(&mut self) -> impl Iterator<Item = &mut ColliderTree> {
+        [
+            &mut self.dynamic_tree,
+            &mut self.kinematic_tree,
+            &mut self.static_tree,
+            &mut self.standalone_tree,
+        ]
+        .into_iter()
     }
 
     /// Returns the proxy with the given [`ColliderTreeProxyKey`], if it exists.

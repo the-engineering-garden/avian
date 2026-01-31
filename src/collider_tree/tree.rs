@@ -3,13 +3,10 @@ use bevy::{
     reflect::prelude::*,
 };
 use obvhs::{
-    INVALID,
     aabb::Aabb,
     bvh2::{Bvh2, insertion_removal::SiblingInsertionCandidate, reinsertion::ReinsertionOptimizer},
     faststack::HeapStack,
-    ploc::{
-        PlocBuilder, PlocSearchDistance, SortPrecision, partial_rebuild::compute_rebuild_path_flags,
-    },
+    ploc::{PlocBuilder, PlocSearchDistance, SortPrecision, rebuild::compute_rebuild_path_flags},
 };
 
 use crate::{
@@ -173,8 +170,14 @@ impl ColliderTree {
     #[inline]
     pub fn add_proxy(&mut self, aabb: Aabb, proxy: ColliderTreeProxy) -> ProxyId {
         let id = self.proxies.push(proxy) as u32;
+
+        // Insert the proxy into the BVH.
         self.bvh
             .insert_primitive(aabb, id, &mut self.workspace.insertion_stack);
+
+        // Add to moved proxies.
+        self.moved_proxies.push(ProxyId::new(id));
+
         ProxyId::new(id)
     }
 
@@ -184,7 +187,17 @@ impl ColliderTree {
     #[inline]
     pub fn remove_proxy(&mut self, proxy_id: ProxyId) -> Option<ColliderTreeProxy> {
         if let Some(proxy) = self.proxies.try_remove(proxy_id.index()) {
+            // Remove from the BVH.
             self.bvh.remove_primitive(proxy_id.id());
+
+            // Remove from moved proxies.
+            for i in 0..self.moved_proxies.len() {
+                if self.moved_proxies[i] == proxy_id {
+                    self.moved_proxies.swap_remove(i);
+                    break;
+                }
+            }
+
             Some(proxy)
         } else {
             None
